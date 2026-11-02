@@ -29,6 +29,7 @@
     <a href="#open">打开方式</a>
     <a href="#practice">做题与记录</a>
     <a href="#ai">配置 AI</a>
+    <a href="#cloud">云同步</a>
     <a href="#backup">备份与恢复</a>
     <a href="#import">导入题库</a>
     <a href="#faq">常见问题</a>
@@ -100,7 +101,34 @@
       <li>对话只带最近 10 轮上下文。</li>
     </ul>
 
-    <h2 id="backup">四、备份与恢复</h2>
+    <h2 id="cloud">四、云同步（Supabase）</h2>
+    <p>线上版没有后端，记录默认只在本机。要让手机和电脑共用一份，用一个免费的 Supabase 项目：</p>
+    <ol>
+      <li>打开 <a href="https://supabase.com" target="_blank" rel="noreferrer">supabase.com</a>，用 GitHub 登录，新建项目（区域选 Singapore 或 Tokyo）；</li>
+      <li>SQL Editor 里执行下面的建表与策略；</li>
+      <li>Settings → API 复制 <code>Project URL</code> 与 <code>anon public</code>；</li>
+      <li>应用 → 设置 → 云同步：填两个值，点“生成同步密钥”，再点“测试云同步”；</li>
+      <li>做题后“立即上传”，或勾选“自动上传”；换设备用同一个密钥“从云端恢复”。</li>
+    </ol>
+    <pre>create table if not exists public.sas_state (
+  code text primary key,
+  payload jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.sas_state enable row level security;
+grant select, insert, update on public.sas_state to anon;
+
+create policy "sas_read" on public.sas_state for select to anon
+  using (code = coalesce(current_setting('request.headers', true)::json ->> 'x-sync-key', ''));
+create policy "sas_insert" on public.sas_state for insert to anon
+  with check (code = coalesce(current_setting('request.headers', true)::json ->> 'x-sync-key', ''));
+create policy "sas_update" on public.sas_state for update to anon
+  using (code = coalesce(current_setting('request.headers', true)::json ->> 'x-sync-key', ''))
+  with check (code = coalesce(current_setting('request.headers', true)::json ->> 'x-sync-key', ''));</pre>
+    <div class="note">anon key 是公开凭据，可以填；数据库密码和 service_role key 绝对不要填进页面。同步密钥相当于这组数据的密码，丢了就恢复不了云端记录。</div>
+    <p>同步是整份覆盖、最后写入者赢，没有自动合并；上传内容不含 AI 密钥和聊天记录。</p>
+
+    <h2 id="backup">五、备份与恢复</h2>
     <p>记录存在浏览器的 <code>localStorage</code>，键名 <code>sas.state.v1</code>。清缓存、换浏览器、换设备都会丢，所以：</p>
     <ul>
       <li><b>导出备份</b>：设置 → 导出学习备份，得到 JSON（含记录、错题、收藏、笔记、设置；不含密钥）。</li>
@@ -108,7 +136,7 @@
       <li><b>建议</b>：每学一周导一次，文件放网盘或发给自己。</li>
     </ul>
 
-    <h2 id="import">五、导入题库</h2>
+    <h2 id="import">六、导入题库</h2>
     <p>设置 → 导入题库，选一个 JSON。最小结构：</p>
     <pre>{
   "questions": [{
@@ -126,7 +154,7 @@
 }</pre>
     <p><code>answer</code> 是选项下标（0 = A）。同一份文件还可以带 <code>points</code> 和 <code>materials</code>，导入后会并入知识图谱。非法条目会被跳过并提示，不会污染题库。</p>
 
-    <h2 id="faq">六、常见问题</h2>
+    <h2 id="faq">七、常见问题</h2>
     <h3>页面空白 / 提示题库未加载</h3>
     <p>确认 <code>app/data/bank.js</code> 与 <code>app/index.html</code> 的相对位置没变。如果是从压缩包里单独拖出 index.html，题库会找不到。</p>
     <h3>AI 提示“直连失败（CORS）”</h3>
@@ -138,12 +166,13 @@
     <h3>想加题 / 改解析</h3>
     <p>改 <code>tools/</code> 里的数据文件，运行 <code>python build.py</code> 重新生成题库；它会做一致性校验和计算题复算。也可以直接用导入题库功能加题。</p>
 
-    <h2 id="limits">七、已知限制</h2>
+    <h2 id="limits">八、已知限制</h2>
     <ul>
       <li>题库 104 题，够起步，不够刷到考前；需要继续扩。</li>
       <li>常识、政治理论只到摘要级，题目少；申论未纳入。</li>
       <li>没有视频字幕，知识点按讲义结构与视频摘要整理，不是逐字稿。</li>
-      <li>手机只做了浏览器适配，没有原生 App；iOS 上 <code>file://</code> 的本地存储策略更严，建议用局域网或发布地址。</li>
+      <li>手机只做了浏览器适配，没有原生 App；iOS 上 <code>file://</code> 的本地存储策略更严，建议用线上地址。</li>
+      <li>线上版没有后端：AI 的自带密钥模式受浏览器跨域限制，WorkBuddy 云模型需要它自己的发布域名。</li>
       <li>课程、讲义、真题版权归原机构；题目为原创模拟题，当前仅限个人学习，不得商用。</li>
     </ul>
 

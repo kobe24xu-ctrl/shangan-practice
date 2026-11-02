@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f6f3ec">
+<title>上岸练习室 · 行测</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23b23a2e'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='serif'>岸</text></svg>">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">岸</div>
+      <div>
+        <div class="brand-name">上岸练习室</div>
+        <div class="brand-sub">行测 · 个人版</div>
+      </div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="side-foot">
+      <div>已连续学习 <b id="sideStreak">0</b> 天</div>
+      <div class="tiny" id="sideBank">题库加载中…</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="tb-brand">上岸练习室</div>
+      <div class="tb-act">
+        <button class="btn sm ghost" data-action="theme" title="切换主题">◐</button>
+        <button class="btn sm ghost" data-go="#/settings">设置</button>
+      </div>
+    </header>
+    <div id="view" class="wrap"></div>
+  </main>
+</div>
+
+<nav class="bottomnav" id="bottomnav"></nav>
+
+<div class="mask" id="mask">
+  <div class="modal" id="modal"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="data/bank.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -88,6 +88,7 @@
       aiChat: [],
       imported: [],
       importedMeta: { points: [], materials: [] },
+      cloud: { enabled: false, url: '', key: '', code: '', auto: true, lastSync: 0, remoteAt: 0, lastError: '' },
       pending: [],
       lastPractice: null
     };
@@ -123,9 +124,11 @@
   let AI_BUSY = false;
   let ROUTE = '#/home';
 
+  let CLOUD_SUPPRESS = false;
   function save() {
     S.lastActive = now();
     try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) { toast('保存失败：浏览器存储不可用或已满'); }
+    if (!CLOUD_SUPPRESS) cloudSchedule();
   }
   function saveCurrent() {
     try { CURRENT ? localStorage.setItem(CKEY, JSON.stringify(CURRENT)) : localStorage.removeItem(CKEY); } catch (e) {}
@@ -961,6 +964,93 @@
     </div>`;
   }
 
+  /* ---------------- 云同步（Supabase REST） ---------------- */
+  let CLOUD_TIMER = null;
+  let CLOUD_BUSY = false;
+
+  function cloudCfg() {
+    if (!S.cloud) S.cloud = { enabled: false, url: '', key: '', code: '', auto: true, lastSync: 0, remoteAt: 0, lastError: '' };
+    return S.cloud;
+  }
+  function cloudReady() {
+    const c = cloudCfg();
+    return !!(c.enabled && /^https?:\/\//.test(c.url || '') && (c.key || '').trim() && /^[A-Za-z0-9_-]{12,}$/.test(c.code || ''));
+  }
+  function cloudHeaders() {
+    const c = cloudCfg();
+    return {
+      apikey: c.key,
+      Authorization: 'Bearer ' + c.key,
+      'Content-Type': 'application/json',
+      'x-sync-key': c.code
+    };
+  }
+  function cloudPayload() {
+    const c = JSON.parse(JSON.stringify(S));
+    c.settings.ai.key = '';
+    delete c.aiChat;
+    delete c.lastResult;
+    delete c.cloud;
+    c.syncedAt = Date.now();
+    return c;
+  }
+
+  async function cloudPush() {
+    const c = cloudCfg();
+    if (!cloudReady()) throw new Error('云同步还没配置完整');
+    if (CLOUD_BUSY) throw new Error('正在同步，稍后再试');
+    CLOUD_BUSY = true; CLOUD_SUPPRESS = true;
+    try {
+      const url = c.url.replace(/\/+$/, '') + '/rest/v1/sas_state?on_conflict=code';
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: Object.assign(cloudHeaders(), { Prefer: 'resolution=merge-duplicates,return=minimal' }),
+        body: JSON.stringify([{ code: c.code, payload: cloudPayload(), updated_at: new Date().toISOString() }])
+      });
+      if (!r.ok) throw new Error('上传失败：' + (await r.text()).slice(0, 160));
+      c.lastSync = Date.now();
+      c.lastError = '';
+      save();
+      return c.lastSync;
+    } finally { CLOUD_BUSY = false; CLOUD_SUPPRESS = false; }
+  }
+
+  async function cloudPull(apply) {
+    const c = cloudCfg();
+    if (!cloudReady()) throw new Error('云同步还没配置完整');
+    CLOUD_BUSY = true; CLOUD_SUPPRESS = true;
+    try {
+      const url = c.url.replace(/\/+$/, '') + '/rest/v1/sas_state?code=eq.' + encodeURIComponent(c.code) + '&select=payload,updated_at';
+      const r = await fetch(url, { headers: cloudHeaders() });
+      if (!r.ok) throw new Error('读取失败：' + (await r.text()).slice(0, 160));
+      const rows = await r.json();
+      if (!rows.length) throw new Error('云端还没有记录，先上传一次');
+      const row = rows[0];
+      c.remoteAt = new Date(row.updated_at).getTime();
+      if (!apply) { save(); return row; }
+      const key = S.settings.ai.key;
+      const cloudCfgSaved = JSON.parse(JSON.stringify(c));
+      const incoming = row.payload || {};
+      S = Object.assign(defaults(), incoming);
+      S.settings = Object.assign(defaults().settings, incoming.settings || {});
+      S.settings.ai = Object.assign(defaults().settings.ai, (incoming.settings || {}).ai || {});
+      S.settings.ai.key = key;
+      S.cloud = Object.assign(cloudCfgSaved, { lastSync: Date.now(), remoteAt: c.remoteAt });
+      S.importedMeta = incoming.importedMeta || { points: [], materials: [] };
+      save(); applyTheme();
+      return row;
+    } finally { CLOUD_BUSY = false; CLOUD_SUPPRESS = false; }
+  }
+
+  function cloudSchedule() {
+    const c = cloudCfg();
+    if (!cloudReady() || !c.auto) return;
+    clearTimeout(CLOUD_TIMER);
+    CLOUD_TIMER = setTimeout(() => {
+      cloudPush().then(() => toast('已同步到云端')).catch((e) => { c.lastError = e.message; save(); });
+    }, 9000);
+  }
+
   /* ---------------- WorkBuddy 云模型 ---------------- */
   let WB_CLOUD = null;
   let WB_SIG = '';
@@ -1232,6 +1322,34 @@
   }
 
   /* ---------------- 设置 ---------------- */
+  function cloudSettingsHtml() {
+    const c = cloudCfg();
+    const state = !c.enabled ? '未开启' : (!cloudReady() ? '配置不完整' : (c.lastError ? '上次出错' : (c.lastSync ? '已连接' : '待首次同步')));
+    return `<div class="spread"><h3 class="card-title" style="margin:0">云同步</h3>
+      <span class="tiny muted">${state}${c.lastSync ? ' · 上次 ' + new Date(c.lastSync).toLocaleString('zh-CN', { hour12: false }) : ''}</span></div>
+      <p class="hint">把学习记录存到 Supabase（免费 Postgres），换设备、清缓存都能拉回来。数据只存在你自己的项目里。</p>
+      <div class="row" style="margin-bottom:12px">
+        <button class="chip ${c.enabled ? 'on' : ''}" data-action="cloud-toggle">${c.enabled ? '已开启' : '开启云同步'}</button>
+        <button class="link small" data-action="cloud-gen">生成同步密钥</button>
+        <span class="tiny muted">密钥相当于这组数据的密码，别丢</span>
+      </div>
+      <div class="grid g2">
+        <div class="field"><label>Supabase 项目 URL</label><input class="input" value="${esc(c.url)}" data-set="cloud.url" placeholder="https://xxxx.supabase.co"></div>
+        <div class="field"><label>anon public key</label><input class="input" value="${esc(c.key)}" data-set="cloud.key" placeholder="eyJhbGciOi…" autocomplete="off"></div>
+      </div>
+      <div class="field"><label>同步密钥（code）</label>
+        <input class="input" value="${esc(c.code)}" data-set="cloud.code" placeholder="点“生成同步密钥”" autocomplete="off">
+        <div class="hint">由字母/数字/-/_ 组成，至少 12 位；服务端用 RLS 按它隔离数据。</div>
+      </div>
+      <label class="row small" style="gap:8px;margin-bottom:10px"><input type="checkbox" ${c.auto ? 'checked' : ''} data-set="cloud.auto"> 自动上传（改动后约 9 秒同步一次）</label>
+      <div class="row">
+        <button class="btn sm" data-action="cloud-push">立即上传</button>
+        <button class="btn sm ghost" data-action="cloud-pull">从云端恢复</button>
+        <button class="btn sm ghost" data-action="cloud-test">测试云同步</button>
+        <span class="small muted" id="cloudMsg">${c.lastError ? '✕ ' + esc(c.lastError).slice(0, 60) : ''}</span>
+      </div>`;
+  }
+
   function aiSettingsHtml() {
     const ai = S.settings.ai;
     const u = S.aiUsage;
@@ -1310,6 +1428,10 @@
           </div>
         </div>
         <label class="row small" style="gap:8px;margin-top:4px"><input type="checkbox" ${S.settings.instant ? 'checked' : ''} data-set="instant"> 答完立即显示解析（关闭后需手动点“查看答案”）</label>
+      </section>
+
+      <section class="card card-pad" style="margin-bottom:14px">
+        ${cloudSettingsHtml()}
       </section>
 
       <section class="card card-pad" style="margin-bottom:14px">
@@ -1677,6 +1799,59 @@
         setTimeout(() => sendAI('请出 2 道同考点、同难度的原创练习题（不要用真题），先只给题目和选项，我做完再看答案。'), 60);
         break;
       }
+      case 'cloud-toggle': {
+        const c = cloudCfg(); c.enabled = !c.enabled; save(); render();
+        toast(c.enabled ? '云同步已开启，记得填 URL 和 key' : '云同步已关闭');
+        break;
+      }
+      case 'cloud-gen': {
+        const arr = new Uint8Array(18);
+        (window.crypto || window.msCrypto).getRandomValues(arr);
+        const c = cloudCfg();
+        c.code = Array.from(arr).map((x) => ('0123456789abcdef'[x >> 4]) + ('0123456789abcdef'[x & 15])).join('');
+        c.enabled = true; save(); render();
+        toast('已生成同步密钥，请自己保存一份');
+        break;
+      }
+      case 'cloud-push': {
+        (async () => {
+          try { await cloudPush(); render(); toast('已上传到云端'); }
+          catch (e) { toast(e.message.slice(0, 60)); const c = cloudCfg(); c.lastError = e.message; save(); }
+        })();
+        break;
+      }
+      case 'cloud-pull': {
+        openModal('从云端恢复', '<p>会用云端记录覆盖这台设备上的学习记录，确定？</p>',
+          '<button class="btn ghost" data-action="close-modal">取消</button><button class="btn primary" data-action="cloud-pull-2">确定恢复</button>');
+        break;
+      }
+      case 'cloud-pull-2': {
+        closeModal();
+        (async () => {
+          try { const row = await cloudPull(true); go('#/home'); toast('已从云端恢复（' + new Date(row.updated_at).toLocaleString('zh-CN', { hour12: false }) + '）'); }
+          catch (e) { toast(e.message.slice(0, 60)); }
+        })();
+        break;
+      }
+      case 'cloud-test': {
+        (async () => {
+          const msg = $('#cloudMsg');
+          if (msg) msg.textContent = '测试中…';
+          try {
+            let row = null;
+            try { row = await cloudPull(false); } catch (e) {
+              if (/云端还没有记录/.test(e.message)) { if (msg) msg.textContent = '✓ 连接正常，云端暂无记录'; toast('连接正常'); return; }
+              throw e;
+            }
+            if (msg) msg.textContent = '✓ 连接正常，云端更新于 ' + new Date(row.updated_at).toLocaleString('zh-CN', { hour12: false });
+            toast('连接正常');
+          } catch (e) {
+            if (msg) msg.textContent = '✕ ' + e.message.slice(0, 70);
+            toast('连接失败：' + e.message.slice(0, 40));
+          }
+        })();
+        break;
+      }
       case 'ai-provider': S.settings.ai.provider = val; save(); render(); break;
       case 'wb-models': {
         (async () => {
@@ -1725,6 +1900,15 @@
     const path = el.getAttribute('data-set');
     let v = el.type === 'checkbox' ? el.checked : el.value;
     if (el.type === 'number') v = Number(v);
+    if (path.startsWith('cloud.')) {
+      const k = path.slice(6);
+      const c = cloudCfg();
+      c[k] = v;
+      if (k === 'enabled') c.enabled = !!v;
+      save();
+      if (k === 'enabled') render();
+      return;
+    }
     if (path === 'goal') S.settings.goal = clamp(Number(v) || 20, 5, 200);
     else if (path === 'instant') S.settings.instant = !!v;
     else if (path.startsWith('ai.')) {
@@ -1789,6 +1973,17 @@
   /* ---------------- 启动 ---------------- */
   applyTheme();
   render();
+
+  (async function checkCloudOnBoot() {
+    if (!cloudReady()) return;
+    try {
+      const row = await cloudPull(false);
+      const remote = new Date(row.updated_at).getTime();
+      if (remote > (cloudCfg().lastSync || 0) + 5000) {
+        toast('云端有更新的记录，可在设置 → 云同步里恢复');
+      }
+    } catch (e) { /* 静默 */ }
+  })();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     // 预留离线缓存位；当前不注册，避免缓存旧题库
   }

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>使用说明 · 上岸练习室</title>
+<meta name="description" content="上岸练习室的使用说明：打开方式、AI 配置、数据备份、题库导入与常见问题。">
+<link rel="stylesheet" href="site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23b23a2e'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='serif'>岸</text></svg>">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="index.html">
+      <div class="mark">岸</div>
+      <div><b>上岸练习室</b><span>使用说明</span></div>
+    </a>
+    <a class="navlink" href="index.html#features">功能</a>
+    <a class="navlink" href="index.html#syllabus">题目与课程</a>
+    <a class="navlink" href="index.html#start">怎么用</a>
+    <a class="btn primary sm" href="../app/index.html">开始练习</a>
+  </div>
+</header>
+
+<div class="wrap doc">
+  <aside class="toc">
+    <b>目录</b>
+    <a href="#open">打开方式</a>
+    <a href="#practice">做题与记录</a>
+    <a href="#ai">配置 AI</a>
+    <a href="#backup">备份与恢复</a>
+    <a href="#import">导入题库</a>
+    <a href="#faq">常见问题</a>
+    <a href="#limits">已知限制</a>
+  </aside>
+
+  <main class="doc-body">
+    <h1>使用说明</h1>
+    <p class="muted">最后更新：2026-11-02 · 对应版本 v1.0</p>
+
+    <h2 id="open">一、打开方式</h2>
+    <h3>1. 双击打开（最省事）</h3>
+    <p>进入项目里的 <code>app/</code> 目录，双击 <code>index.html</code>。题库会正常加载，答题、判分、错题、统计都能用，记录保存在浏览器本地。</p>
+    <div class="note">这种打开方式下浏览器会拦截跨域请求，AI 功能不可用，页面里会给出提示。</div>
+
+    <h3>2. 本地服务（AI 可用）</h3>
+    <p>需要 Node.js 18 或更高版本。在项目根目录执行：</p>
+    <pre>node server.js</pre>
+    <p>然后打开 <code>http://localhost:8787</code>。AI 请求会走本地代理，不受浏览器跨域限制。</p>
+
+    <h3>3. 手机访问（同一 Wi-Fi）</h3>
+    <p>电脑上这样启动，让服务监听局域网：</p>
+    <pre>HOST=0.0.0.0 node server.js</pre>
+    <p>用 <code>ipconfig</code> 查电脑的 IPv4 地址（例如 192.168.1.23），手机浏览器打开 <code>http://192.168.1.23:8787</code>。电脑要保持开机。</p>
+
+    <h2 id="practice">二、做题与记录</h2>
+    <ul>
+      <li><b>练习页</b>：选模块、知识点、难度、题量，再选练法。不选知识点就练该模块全部。</li>
+      <li><b>答题</b>：选完立即判分（可在设置里关掉），解析下面能记错因和笔记。</li>
+      <li><b>错题本</b>：做错自动进来，按错因筛选；点“已掌握”才移出。</li>
+      <li><b>收藏</b>：题目右上角星标，收藏页可整组重练。</li>
+      <li><b>模考</b>：按模块比例组卷，倒计时、答题卡、交卷判分、模块报告。</li>
+      <li><b>统计</b>：近 14 天题量、模块正确率、错因分布、知识点掌握度。</li>
+    </ul>
+    <p>键盘操作：<code>A/B/C/D</code> 选项，<code>←</code> <code>→</code> 切题。</p>
+
+    <h2 id="ai">三、配置 AI</h2>
+    <p>设置 → AI 模型，有两种接法，随时可切换。</p>
+
+    <h3>A. 自带 API 密钥</h3>
+    <p>填四项即可：</p>
+    <table class="table">
+      <thead><tr><th>字段</th><th>说明</th><th>示例</th></tr></thead>
+      <tbody>
+        <tr><td>接口地址</td><td>OpenAI 兼容的 Base URL，末尾不要带 /chat/completions</td><td><code>https://api.deepseek.com/v1</code></td></tr>
+        <tr><td>模型名称</td><td>服务商文档里的模型 ID</td><td><code>deepseek-chat</code></td></tr>
+        <tr><td>API 密钥</td><td>只存本机浏览器，不写入源码</td><td><code>sk-…</code></td></tr>
+        <tr><td>价格</td><td>输入/输出“元/百万 tokens”，用于费用估算</td><td>2 / 8</td></tr>
+      </tbody>
+    </table>
+    <p>填完点“测试连接”。密钥不要发到聊天里，也不要提交到代码仓库。</p>
+
+    <h3>B. WorkBuddy 云模型（积分）</h3>
+    <p>不用密钥，消耗你 WorkBuddy 账号的应用额度。前提是这个项目已经发布成应用并开通云服务，然后：</p>
+    <ol>
+      <li>在云服务面板复制 <code>endpoint</code> 和 <code>publishableKey</code>（<code>wbpk_</code> 开头）；</li>
+      <li>打开<b>发布后的域名</b>（不是 localhost）；</li>
+      <li>设置 → AI 模型 → WorkBuddy 云模型，填入两个值；</li>
+      <li>点“拉取模型列表”，选一个模型。</li>
+    </ol>
+    <div class="note">云服务按 Origin 精确匹配，<code>localhost</code> 和 <code>file://</code> 会被拒绝，报 <code>auth_</code> 错误。这是服务端规则，不是页面 bug。</div>
+    <p>云模型只支持流式输出；SDK 不提供余额、额度、账单查询，页面只累计展示单次返回的 <code>credit</code>。额度用完会报 <code>quota_</code>，重试无效。</p>
+
+    <h3>成本控制</h3>
+    <ul>
+      <li>普通刷题不调用模型，题库自带解析；只有点“问 AI”才发请求。</li>
+      <li>每次发送前显示预估 tokens 与费用（自带密钥模式）。</li>
+      <li>每日调用上限，两种模式都生效。</li>
+      <li>对话只带最近 10 轮上下文。</li>
+    </ul>
+
+    <h2 id="backup">四、备份与恢复</h2>
+    <p>记录存在浏览器的 <code>localStorage</code>，键名 <code>sas.state.v1</code>。清缓存、换浏览器、换设备都会丢，所以：</p>
+    <ul>
+      <li><b>导出备份</b>：设置 → 导出学习备份，得到 JSON（含记录、错题、收藏、笔记、设置；不含密钥）。</li>
+      <li><b>导入备份</b>：设置 → 导入备份，会覆盖当前记录，有二次确认。</li>
+      <li><b>建议</b>：每学一周导一次，文件放网盘或发给自己。</li>
+    </ul>
+
+    <h2 id="import">五、导入题库</h2>
+    <p>设置 → 导入题库，选一个 JSON。最小结构：</p>
+    <pre>{
+  "questions": [{
+    "id": "my-001",
+    "module": "ziliao",
+    "point": "zl-bz",
+    "difficulty": 2,
+    "stem": "题干，可含 HTML",
+    "options": ["A", "B", "C", "D"],
+    "answer": 2,
+    "explain": "解析",
+    "optionNotes": ["A错在哪", "B错在哪", "C对在哪", "D错在哪"],
+    "review": { "status": "pending", "note": "自建题，待审核" }
+  }]
+}</pre>
+    <p><code>answer</code> 是选项下标（0 = A）。同一份文件还可以带 <code>points</code> 和 <code>materials</code>，导入后会并入知识图谱。非法条目会被跳过并提示，不会污染题库。</p>
+
+    <h2 id="faq">六、常见问题</h2>
+    <h3>页面空白 / 提示题库未加载</h3>
+    <p>确认 <code>app/data/bank.js</code> 与 <code>app/index.html</code> 的相对位置没变。如果是从压缩包里单独拖出 index.html，题库会找不到。</p>
+    <h3>AI 提示“直连失败（CORS）”</h3>
+    <p>浏览器不允许网页直接调多数模型服务。用 <code>node server.js</code> 启动后访问 <code>http://localhost:8787</code>，或把请求方式改成“只走代理”。</p>
+    <h3>云模型报 auth_</h3>
+    <p>当前域名不是这个应用的发布域名，或云服务没开通。换成发布后的网址再试。</p>
+    <h3>手机能打开但记录不同步</h3>
+    <p>记录是按浏览器存的，手机和电脑各一份。用导出/导入备份迁移，或等以后加账号同步。</p>
+    <h3>想加题 / 改解析</h3>
+    <p>改 <code>tools/</code> 里的数据文件，运行 <code>python build.py</code> 重新生成题库；它会做一致性校验和计算题复算。也可以直接用导入题库功能加题。</p>
+
+    <h2 id="limits">七、已知限制</h2>
+    <ul>
+      <li>题库 104 题，够起步，不够刷到考前；需要继续扩。</li>
+      <li>常识、政治理论只到摘要级，题目少；申论未纳入。</li>
+      <li>没有视频字幕，知识点按讲义结构与视频摘要整理，不是逐字稿。</li>
+      <li>手机只做了浏览器适配，没有原生 App；iOS 上 <code>file://</code> 的本地存储策略更严，建议用局域网或发布地址。</li>
+      <li>课程、讲义、真题版权归原机构；题目为原创模拟题，当前仅限个人学习，不得商用。</li>
+    </ul>
+
+    <p style="margin-top:34px"><a class="btn primary" href="../app/index.html">去练习 →</a> <a class="btn ghost" href="index.html">回首页</a></p>
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div>上岸练习室 v1.0 · 2026-11-02</div>
+    <div><a href="index.html">首页</a> · <a href="../app/index.html#/about">关于与授权</a></div>
+  </div>
+</footer>
+
+<script>
+/* 让“开始做题”在三种环境下都指向正确位置：本地 file://、localhost、GitHub Pages 子路径 */
+(function () {
+  var base = location.protocol === 'file:' ? '../app/index.html' : new URL('app/index.html', location.href).href;
+  Array.prototype.forEach.call(document.querySelectorAll('a[href*="../app/"]'), function (a) {
+    var h = a.getAttribute('href');
+    var i = h.indexOf('#');
+    a.setAttribute('href', base + (i >= 0 ? h.slice(i) : ''));
+  });
+})();
+</script>
+<script>
+/* 单页预览环境不含 ../app/，点击时给出提示而不是 403。
+   正式服务与本地打开时此段不生效。 */
+(function () {
+  if (location.pathname.indexOf('/static-html/') !== 0) return;
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href*="../app/"]');
+    if (!a) return;
+    e.preventDefault();
+    var t = document.createElement('div');
+    t.textContent = '单页预览不含练习应用，请打开 http://localhost:8787/app/';
+    t.style.cssText = 'position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#1d2126;color:#f6f3ec;padding:10px 16px;border-radius:8px;font-size:13px;z-index:99;max-width:86vw;text-align:center';
+    document.body.appendChild(t);
+    setTimeout(function () { t.remove(); }, 3600);
+  });
+})();
+</script>
+</body>
+</html>

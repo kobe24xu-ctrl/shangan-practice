@@ -50,6 +50,68 @@
   const LEC = window.LECTURES || { teacher: { name: '林岸', title: '行测主讲', avatar: 'assets/teacher.jpg', tagline: '', bio: '' }, lectures: [] };
   const LMAP = Object.fromEntries((LEC.lectures || []).map((l) => [l.pointId, l]));
   const TEACHER = LEC.teacher;
+
+  /* ---------------- 在线语音 ---------------- */
+  const TTS_FALLBACK = {
+    mock: false,
+    maxChars: 500,
+    dailyCharLimit: 20000,
+    tones: [
+      { id: 'calm', name: '平稳讲解', desc: '默认，语速稳定，重点清楚' },
+      { id: 'warm', name: '亲切一点', desc: '像单独给学生讲，语气更柔和' },
+      { id: 'emphasis', name: '重点强调', desc: '数字和结论处放慢、加重' }
+    ],
+    providers: [
+      {
+        id: 'cosyvoice', name: '阿里百炼 CosyVoice', short: 'CosyVoice', model: 'cosyvoice-v3-flash',
+        pricePer10k: 1, freeChars: 10000, freeDays: 90, configured: null, hint: '',
+        voices: [
+          { id: 'longanhuan', name: '龙安欢', gender: 'female', style: '亲切元气', note: '像耐心的女老师，适合知识点讲解' },
+          { id: 'longyingling_v3', name: '龙应聆', gender: 'female', style: '温和共情', note: '语气柔和，适合错题安慰式讲解' },
+          { id: 'longyingtao_v3', name: '龙应桃', gender: 'female', style: '温柔淡定', note: '语速平稳，适合长段概念' },
+          { id: 'longanyang', name: '龙安洋', gender: 'male', style: '阳光清亮', note: '年轻男声，适合方法课' },
+          { id: 'longfei_v3', name: '龙飞', gender: 'male', style: '磁性沉稳', note: '偏低音，适合重点总结' },
+          { id: 'longyingxun_v3', name: '龙应询', gender: 'male', style: '年轻青涩', note: '像学长讲题，亲和' }
+        ]
+      },
+      {
+        id: 'doubao', name: '火山引擎 豆包语音', short: '豆包', model: 'seed-tts-2.0',
+        pricePer10k: 3, freeChars: 20000, freeDays: 180, configured: null, hint: '',
+        voices: [
+          { id: 'zh_female_yingyujiaoxue_uranus_bigtts', name: 'Tina 老师', gender: 'female', style: '教学讲解', note: '教育场景音色，吐字清楚' },
+          { id: 'zh_female_vv_uranus_bigtts', name: 'Vivi 2.0', gender: 'female', style: '自然通用', note: '通用旗舰音色，接近真人' },
+          { id: 'zh_female_zhixingnv_uranus_bigtts', name: '知性女声', gender: 'female', style: '知性平稳', note: '适合概念与方法' },
+          { id: 'zh_male_m191_uranus_bigtts', name: '云舟 2.0', gender: 'male', style: '沉稳讲解', note: '通用男声，适合系统课' },
+          { id: 'zh_male_ruyaqingnian_uranus_bigtts', name: '儒雅青年', gender: 'male', style: '儒雅温和', note: '语流自然，适合长句' },
+          { id: 'zh_male_yuanboxiaoshu_uranus_bigtts', name: '渊博小叔', gender: 'male', style: '成熟稳重', note: '偏低音，适合总结与提醒' }
+        ]
+      }
+    ]
+  };
+  let TTS_STATUS = null;
+  let TTS_FETCH_ERR = '';
+  let VUI = {
+    provider: 'cosyvoice', voice: '', rate: 1, tone: 'calm',
+    preset: 0, text: '', loading: false, error: '', hint: '', audioUrl: '', msg: ''
+  };
+  const VOICE_PRESETS = [
+    {
+      name: '知识点讲解',
+      text: '资料分析里，基期量等于现期量除以一加增长率。比如，2025 年某市旅游收入 1462.5 亿元，同比增长 24.3%，那么 2024 年大约是 1177 亿元。注意，这里要用除法，不是乘以 1 减 24.3%。请判断，下列选项正确的是：A，1177 亿元；B，1107 亿元；C，1233 亿元；D，1320 亿元。'
+    },
+    {
+      name: '多音字',
+      text: '银行行业的调查报告显示，重要的事情要重复核对；调高音量以后，再把数据数一遍。差之毫厘，谬以千里，遇到多音字，先看它在句子里是什么意思。'
+    },
+    {
+      name: '数字与年份',
+      text: '2020 年到 2025 年，某省新能源汽车产量从 32.4 万辆增加到 82.5 万辆，年均增长约 10.02 万辆；2025 年同比增长 19.7%，比 2024 年提高了 3.1 个百分点。'
+    },
+    {
+      name: '题目选项',
+      text: '根据材料，下列说法正确的是：A，2025 年制造业增加值超过 5000 亿元；B，采矿业增速高于制造业；C，电力行业占比不足一成；D，三个门类合计增速约为 7%。答案是 D。'
+    }
+  ];
   const REASONS = ['概念不清', '计算失误', '审题偏差', '时间不够', '完全没思路'];
 
   /* ---------------- 状态 ---------------- */
@@ -95,6 +157,7 @@
       pending: [],
       lectures: {},
       lectureRate: 1,
+      tts: { provider: 'system', voice: '', rate: 1, tone: 'calm' },
       lastPractice: null
     };
   }
@@ -109,6 +172,7 @@
       const out = Object.assign(base, s);
       out.settings = Object.assign(base.settings, s.settings || {});
       out.settings.ai = Object.assign(base.settings.ai, (s.settings || {}).ai || {});
+      out.settings.tts = Object.assign(base.settings.tts, (s.settings || {}).tts || {});
       out.records = s.records || {};
       out.sessions = s.sessions || [];
       out.daily = s.daily || {};
@@ -941,6 +1005,272 @@
     </div>`;
   }
 
+  /* ---------------- 在线语音试听 ---------------- */
+  let TTS_LOADING = false;
+
+  function ttsProviders() {
+    return (TTS_STATUS && TTS_STATUS.providers) || TTS_FALLBACK.providers;
+  }
+  function ttsTones() {
+    return (TTS_STATUS && TTS_STATUS.tones) || TTS_FALLBACK.tones;
+  }
+  function ttsProvider(id) {
+    return ttsProviders().find((p) => p.id === id) || ttsProviders()[0];
+  }
+  function ttsVoice(p, id) {
+    if (!p) return null;
+    return p.voices.find((v) => v.id === id) || p.voices[0];
+  }
+  function ttsPrice(p, chars) {
+    return (chars / 10000) * (Number(p.pricePer10k) || 0);
+  }
+
+  async function fetchTTSStatus(force) {
+    if (TTS_LOADING) return;
+    TTS_LOADING = true;
+    try {
+      const r = await fetch('/api/tts/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      if (!data || !Array.isArray(data.providers)) throw new Error('返回格式不对');
+      TTS_STATUS = data;
+      TTS_FETCH_ERR = '';
+    } catch (e) {
+      TTS_FETCH_ERR = location.protocol === 'file:' ? '本地文件打开，没有语音服务端' : (e.message || '请求失败');
+    } finally {
+      TTS_LOADING = false;
+      if (location.hash.startsWith('#/voice')) render();
+    }
+  }
+
+  async function refreshTTSStatusOnly() {
+    try {
+      const r = await fetch('/api/tts/status', { cache: 'no-store' });
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data && Array.isArray(data.providers)) TTS_STATUS = data;
+    } catch (e) { /* ignore */ }
+  }
+
+  function setVoiceMsg(text, kind) {
+    VUI.msg = text || '';
+    const el = $('#voiceMsg');
+    if (el) {
+      el.textContent = text || '';
+      el.className = 'voice-msg ' + (kind || '');
+    }
+  }
+
+  function viewVoice() {
+    if (!VUI.text) VUI.text = VOICE_PRESETS[0].text;
+    const providers = ttsProviders();
+    const p = ttsProvider(VUI.provider);
+    const v = ttsVoice(p, VUI.voice);
+    if (v && VUI.voice !== v.id) VUI.voice = v.id;
+    const tones = ttsTones();
+    const chars = VUI.text.length;
+    const price = ttsPrice(p, chars);
+    const usage = (TTS_STATUS && TTS_STATUS.usage) || null;
+    const configured = !!p.configured;
+
+    let banner = '';
+    if (TTS_STATUS && TTS_STATUS.mock) {
+      banner = `<div class="voice-alert warn"><b>Mock 联调模式</b><span>现在返回的是测试音，不会调用 CosyVoice 或豆包。去掉启动参数 <code>TTS_MOCK=1</code>，填好密钥后才是真实声音。</span></div>`;
+    } else if (TTS_FETCH_ERR) {
+      banner = `<div class="voice-alert warn"><b>连不上语音服务端</b><span>${esc(TTS_FETCH_ERR)}。在线语音需要运行 <code>node server.js</code>，或在部署的 Node 服务上访问；纯静态 Pages 只能用系统语音。</span></div>`;
+    } else if (!TTS_STATUS) {
+      banner = `<div class="voice-alert"><b>正在检查语音服务…</b><span>如果长时间没有结果，说明当前页面没有服务端。</span></div>`;
+    } else if (!configured) {
+      banner = `<div class="voice-alert warn"><b>${esc(p.name)} 还没配置</b><span>${esc(p.hint || '请在服务端 .env 中填写密钥。')} 配置后重启 <code>node server.js</code> 即可试听。</span></div>`;
+    } else {
+      banner = `<div class="voice-alert ok"><b>已连接 ${esc(p.name)}</b><span>今日已合成 ${usage ? usage.chars : 0} 字${usage && usage.estimatedCost ? ' · 约 ¥' + usage.estimatedCost : ''}。密钥只在服务端，浏览器拿不到。</span></div>`;
+    }
+
+    const providerTabs = providers.map((x) => {
+      const tag = (TTS_STATUS && TTS_STATUS.mock) ? 'Mock' : (x.configured === true ? '已配置' : (x.configured === false ? '未配置' : ''));
+      return `<button class="chip ${x.id === p.id ? 'on' : ''}" data-action="voice-provider" data-val="${x.id}">${esc(x.short)} <span class="tiny">${tag}</span></button>`;
+    }).join('');
+    const toneChips = tones.map((t) => `<button class="chip ${t.id === VUI.tone ? 'on' : ''}" data-action="voice-tone" data-val="${t.id}" title="${esc(t.desc)}">${esc(t.name)}</button>`).join('');
+    const rateChips = [0.8, 0.9, 1, 1.1, 1.2, 1.4].map((r) => `<button class="chip ${Math.abs(VUI.rate - r) < 0.001 ? 'on' : ''}" data-action="voice-rate" data-val="${r}">${r}x</button>`).join('');
+    const presetChips = VOICE_PRESETS.map((x, i) => `<button class="chip ${i === VUI.preset ? 'on' : ''}" data-action="voice-preset" data-val="${i}">${esc(x.name)}</button>`).join('');
+    const voiceCards = p.voices.map((x) => `<button class="voice-card ${x.id === v.id ? 'on' : ''}" data-action="voice-select" data-val="${x.id}">
+      <span class="vc-gender ${x.gender}">${x.gender === 'female' ? '女' : '男'}</span>
+      <b>${esc(x.name)}</b>
+      <span class="vc-style">${esc(x.style)}</span>
+      <small>${esc(x.note)}</small>
+      <span class="vc-play">${x.id === v.id && VUI.loading ? '合成中…' : '▶ 试听'}</span>
+    </button>`).join('');
+
+    return `<div class="fade-in">
+      <div class="page-head"><div><div class="kicker">语音讲解</div><h1 class="page-title">语音试听</h1>
+      <div class="page-sub">同一段考公讲解，换声音、语速和语气；合成在服务端完成，密钥不进浏览器，也不写进仓库。</div></div>
+      <div class="row"><a class="btn sm ghost" href="#/lectures">回到讲师精讲</a><a class="btn sm ghost" href="#/settings">模型设置</a></div></div>
+
+      ${banner}
+
+      <section class="card voice-panel">
+        <div class="voice-controls">
+          <div class="vc-group"><label>服务商</label><div class="row">${providerTabs}</div></div>
+          <div class="vc-group"><label>语气</label><div class="row">${toneChips}</div></div>
+          <div class="vc-group"><label>语速</label><div class="row">${rateChips}</div></div>
+        </div>
+        <div class="voice-grid">${voiceCards}</div>
+      </section>
+
+      <div class="voice-layout">
+        <section class="card card-pad">
+          <div class="spread"><h3 class="card-title" style="margin:0">试听文本</h3><span class="tiny muted" id="voiceMeta">${chars} 字 · 预计 ¥${price.toFixed(4)}</span></div>
+          <div class="row" style="margin:10px 0">${presetChips}</div>
+          <textarea class="input voice-text" id="voiceText" rows="7" maxlength="${(TTS_STATUS && TTS_STATUS.maxChars) || 500}">${esc(VUI.text)}</textarea>
+          <div class="voice-meta">
+            <span>上限 ${(TTS_STATUS && TTS_STATUS.maxChars) || 500} 字</span>
+            <span>${p.name} · ${v.name} · ${VUI.rate}x · ${(tones.find((t) => t.id === VUI.tone) || {}).name || ''}</span>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn primary" data-action="voice-play" ${VUI.loading ? 'disabled' : ''}>${VUI.loading ? '合成中…' : '合成并播放'}</button>
+            <button class="btn ghost" data-action="voice-stop">停止</button>
+            <button class="btn ghost" data-action="voice-system">用系统语音</button>
+            <button class="btn ghost" data-action="voice-save">保存为默认讲解音色</button>
+          </div>
+          <div class="voice-msg ${VUI.error ? 'bad' : ''}" id="voiceMsg">${esc(VUI.error ? '✕ ' + VUI.error : VUI.msg)}</div>
+          <audio id="voiceAudio" controls preload="none"></audio>
+        </section>
+
+        <aside class="card card-pad voice-side">
+          <h3 class="card-title">这个声音怎么收费</h3>
+          <div class="voice-price"><b>${p.pricePer10k}</b><span>元 / 万字符</span></div>
+          <div class="small muted">免费额度：${p.freeChars} 字 / ${p.freeDays} 天（以开通时控制台为准）</div>
+          <div class="voice-cost-row"><span>本次 ${chars} 字</span><b>≈ ¥${price.toFixed(4)}</b></div>
+          <div class="hint">按输入字符计费，标点、数字、英文字母都算 1 个字符；输出音频不另计费。服务端有每日 ${((TTS_STATUS && TTS_STATUS.dailyCharLimit) || 20000)} 字的保护上限。</div>
+          <hr>
+          <div class="small"><b>模型</b>：${esc(p.model)}</div>
+          <div class="small"><b>地域</b>：${esc(p.region || '')}</div>
+          <div class="small" style="margin-top:8px"><a class="link" href="${esc(p.docs || '#')}" target="_blank" rel="noreferrer">官方接口文档 →</a></div>
+          <div class="voice-side-note">${(p.notes || []).map((n) => `<div>· ${esc(n)}</div>`).join('')}</div>
+        </aside>
+      </div>
+
+      <section class="card card-pad" style="margin-top:16px">
+        <h3 class="card-title">怎么选</h3>
+        <div class="voice-compare">
+          <div><b>CosyVoice v3-flash</b><span>1 元/万字符，1 万免费字。音色自然，价格最低，适合作为默认讲解。</span></div>
+          <div><b>豆包语音 2.0</b><span>3 元/万字符，2 万免费字。Tina 老师等教育音色更贴近课堂，适合对比后再定。</span></div>
+        </div>
+        <div class="hint">试听时重点听：数字和年份有没有读错、句号处有没有停顿、多音字（银行、调查、重复、数一遍）是否自然、A/B/C/D 选项有没有连读。这些都通过后，再保存为默认音色。</div>
+      </section>
+    </div>`;
+  }
+
+  function voicePickProvider(id) {
+    VUI.provider = id;
+    const p = ttsProvider(id);
+    VUI.voice = p.voices[0].id;
+    VUI.error = '';
+    render();
+  }
+
+  function voicePickTone(id) {
+    VUI.tone = id;
+    VUI.error = '';
+    render();
+  }
+
+  function voicePickRate(r) {
+    VUI.rate = Number(r);
+    VUI.error = '';
+    render();
+  }
+
+  function voicePickPreset(i) {
+    VUI.preset = Number(i);
+    VUI.text = VOICE_PRESETS[VUI.preset].text;
+    VUI.error = '';
+    render();
+  }
+
+  function voicePickVoice(id) {
+    VUI.voice = id;
+    VUI.error = '';
+    render();
+  }
+
+  function voiceStop() {
+    const audio = $('#voiceAudio');
+    if (audio) { try { audio.pause(); audio.currentTime = 0; } catch (e) {} }
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    setVoiceMsg('已停止', '');
+  }
+
+  async function voicePlay() {
+    const p = ttsProvider(VUI.provider);
+    const v = ttsVoice(p, VUI.voice);
+    if (!p || !v) return;
+    if (!p.configured) {
+      setVoiceMsg('✕ ' + (p.hint || (p.name + ' 还没配置密钥')) + ' 可以先用「系统语音」试听。', 'bad');
+      return;
+    }
+    VUI.loading = true;
+    VUI.error = '';
+    setVoiceMsg('合成中…', '');
+    const btn = document.querySelector('[data-action="voice-play"]');
+    if (btn) { btn.disabled = true; btn.textContent = '合成中…'; }
+    const t0 = performance.now();
+    try {
+      const r = await fetch('/api/tts/synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: p.id, voice: v.id, rate: VUI.rate, tone: VUI.tone, text: VUI.text })
+      });
+      if (!r.ok) {
+        let data = null;
+        try { data = await r.json(); } catch (e) {}
+        const err = (data && data.error) || {};
+        const e = new Error(err.message || ('HTTP ' + r.status));
+        e.hint = err.hint || '';
+        throw e;
+      }
+      const blob = await r.blob();
+      if (VUI.audioUrl) URL.revokeObjectURL(VUI.audioUrl);
+      VUI.audioUrl = URL.createObjectURL(blob);
+      const audio = $('#voiceAudio');
+      if (audio) { audio.src = VUI.audioUrl; audio.play().catch(() => {}); }
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      const cached = r.headers.get('X-TTS-Cached') === '1';
+      setVoiceMsg(`✓ 已合成 ${VUI.text.length} 字 · ${secs}s${cached ? ' · 缓存命中，未重复计费' : ''}`, 'ok');
+      refreshTTSStatusOnly();
+    } catch (e) {
+      setVoiceMsg('✕ ' + e.message + (e.hint ? ' · ' + e.hint : ''), 'bad');
+    } finally {
+      VUI.loading = false;
+      const b = document.querySelector('[data-action="voice-play"]');
+      if (b) { b.disabled = false; b.textContent = '合成并播放'; }
+    }
+  }
+
+  function voiceSystem() {
+    if (!('speechSynthesis' in window)) { setVoiceMsg('✕ 当前浏览器不支持系统语音', 'bad'); return; }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(VUI.text);
+    u.lang = 'zh-CN';
+    u.rate = clamp(VUI.rate, 0.6, 1.6);
+    const vs = speechSynthesis.getVoices() || [];
+    const zh = vs.find((x) => /^zh/i.test(x.lang));
+    if (zh) u.voice = zh;
+    u.onend = () => setVoiceMsg('系统语音播放完毕（不消耗额度）', 'ok');
+    speechSynthesis.speak(u);
+    setVoiceMsg('系统语音播放中…（不消耗额度）', '');
+  }
+
+  function voiceSave() {
+    const p = ttsProvider(VUI.provider);
+    const v = ttsVoice(p, VUI.voice);
+    if (!p.configured) { setVoiceMsg('✕ 这个服务商还没配置，不能保存为默认。', 'bad'); return; }
+    S.settings.tts = { provider: p.id, voice: v.id, rate: VUI.rate, tone: VUI.tone };
+    save();
+    setVoiceMsg(`✓ 已保存：${p.short} · ${v.name} · ${VUI.rate}x。讲师精讲的「朗读本节」会优先用它。`, 'ok');
+    toast('已保存为默认讲解音色');
+  }
+
   /* ---------------- 虚拟讲师 ---------------- */
   let LEC_SPEAK = { pid: null, idx: -1 };
   let LEC_VOICE = null;
@@ -975,11 +1305,22 @@
     return LEC_VOICE;
   }
 
+  let LEC_AUDIO = null;
+  let LEC_ABORT = null;
+
   function stopLectureSpeech() {
     if ('speechSynthesis' in window) speechSynthesis.cancel();
+    if (LEC_ABORT) { try { LEC_ABORT.abort(); } catch (e) {} LEC_ABORT = null; }
+    if (LEC_AUDIO) {
+      try { LEC_AUDIO.pause(); LEC_AUDIO.src = ''; } catch (e) {}
+      LEC_AUDIO = null;
+    }
     LEC_SPEAK = { pid: null, idx: -1 };
     $$('.lec-sec.speaking').forEach((el) => el.classList.remove('speaking'));
-    $$('[data-action="lec-read"]').forEach((b) => { b.textContent = b.getAttribute('data-orig') || '朗读本节'; });
+    $$('[data-action="lec-read"]').forEach((b) => {
+      b.textContent = b.getAttribute('data-orig') || '朗读本节';
+      b.disabled = false;
+    });
   }
 
   function markLectureDone(pid, idx) {
@@ -1000,36 +1341,111 @@
     if (barEl) barEl.style.width = (lecDoneCount(pid) / 5 * 100) + '%';
   }
 
-  function speakLecture(pid, idx) {
-    if (!('speechSynthesis' in window)) { toast('当前浏览器不支持语音朗读，可以看文字稿'); return; }
-    const lec = LMAP[pid];
-    if (!lec) return;
-    stopLectureSpeech();
-    const sec = lec.sections[idx];
+  function readUI(idx) {
+    const el = document.getElementById('lec-sec-' + idx);
+    const btn = el && el.querySelector('[data-action="lec-read"]');
+    if (el) el.classList.add('speaking');
+    if (btn) {
+      if (!btn.getAttribute('data-orig')) btn.setAttribute('data-orig', '朗读本节');
+      btn.textContent = '朗读中…';
+    }
+    return { el, btn };
+  }
+
+  function speakSystemSection(pid, idx, sec, prefix) {
+    if (!('speechSynthesis' in window)) { toast('当前浏览器不支持系统语音，可以看文字稿'); return; }
+    const ui = readUI(idx);
     const u = new SpeechSynthesisUtterance(lecSectionText(sec));
     u.lang = 'zh-CN';
     u.rate = clamp(Number(S.lectureRate) || 1, 0.6, 1.6);
     u.pitch = 1;
     const v = pickZhVoice();
     if (v) u.voice = v;
-    const el = document.getElementById('lec-sec-' + idx);
-    if (el) el.classList.add('speaking');
-    const btn = el && el.querySelector('[data-action="lec-read"]');
-    if (btn) { if (!btn.getAttribute('data-orig')) btn.setAttribute('data-orig', '朗读本节'); btn.textContent = '朗读中…'; }
     LEC_SPEAK = { pid, idx };
     u.onend = () => {
       LEC_SPEAK = { pid: null, idx: -1 };
-      if (el) el.classList.remove('speaking');
-      if (btn) btn.textContent = '再读一遍';
+      if (ui.el) ui.el.classList.remove('speaking');
+      if (ui.btn) ui.btn.textContent = '再读一遍';
       markLectureDone(pid, idx);
     };
     u.onerror = (e) => {
       LEC_SPEAK = { pid: null, idx: -1 };
-      if (el) el.classList.remove('speaking');
-      if (btn) btn.textContent = '朗读本节';
-      if (e && e.error !== 'canceled') toast('朗读失败：' + (e.error || '系统语音不可用'));
+      if (ui.el) ui.el.classList.remove('speaking');
+      if (ui.btn) ui.btn.textContent = '朗读本节';
+      if (e && e.error !== 'canceled') toast((prefix || '') + '系统语音失败：' + (e.error || '不可用'));
     };
     speechSynthesis.speak(u);
+  }
+
+  async function speakCloudSection(pid, idx, sec, cfg) {
+    const ui = readUI(idx);
+    if (ui.btn) { ui.btn.textContent = '云端合成中…'; ui.btn.disabled = true; }
+    const p = ttsProvider(cfg.provider);
+    const v = ttsVoice(p, cfg.voice);
+    LEC_SPEAK = { pid, idx };
+    LEC_ABORT = new AbortController();
+    const timer = setTimeout(() => { try { LEC_ABORT.abort(); } catch (e) {} }, 35000);
+    try {
+      const r = await fetch('/api/tts/synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: cfg.provider, voice: cfg.voice, rate: cfg.rate || 1,
+          tone: cfg.tone || 'calm', text: lecSectionText(sec)
+        }),
+        signal: LEC_ABORT.signal
+      });
+      if (!r.ok) {
+        let data = null;
+        try { data = await r.json(); } catch (e) {}
+        throw new Error(((data && data.error && data.error.message) || ('HTTP ' + r.status)));
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      LEC_AUDIO = audio;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        LEC_AUDIO = null;
+        LEC_SPEAK = { pid: null, idx: -1 };
+        if (ui.el) ui.el.classList.remove('speaking');
+        if (ui.btn) { ui.btn.textContent = '再读一遍'; ui.btn.disabled = false; }
+        markLectureDone(pid, idx);
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        LEC_AUDIO = null;
+        if (ui.el) ui.el.classList.remove('speaking');
+        if (ui.btn) { ui.btn.textContent = '朗读本节'; ui.btn.disabled = false; }
+        toast('云端音频播放失败，已切换系统语音');
+        speakSystemSection(pid, idx, sec, '云端播放失败，');
+      };
+      await audio.play();
+      if (ui.btn) { ui.btn.textContent = '云端播放中…'; ui.btn.disabled = false; }
+    } catch (e) {
+      if (ui.el) ui.el.classList.remove('speaking');
+      if (ui.btn) { ui.btn.textContent = '朗读本节'; ui.btn.disabled = false; }
+      LEC_SPEAK = { pid: null, idx: -1 };
+      if (e.name === 'AbortError') { toast('云端语音超时，已停止'); return; }
+      toast('云端语音不可用：' + e.message.slice(0, 50) + '；已切换系统语音');
+      speakSystemSection(pid, idx, sec, '云端不可用，');
+    } finally {
+      clearTimeout(timer);
+      LEC_ABORT = null;
+    }
+  }
+
+  function speakLecture(pid, idx) {
+    const lec = LMAP[pid];
+    if (!lec) return;
+    stopLectureSpeech();
+    const sec = lec.sections[idx];
+    const cfg = S.settings.tts || { provider: 'system' };
+    if (cfg.provider !== 'system' && cfg.voice) {
+      speakCloudSection(pid, idx, sec, cfg);
+      return;
+    }
+    speakSystemSection(pid, idx, sec, '');
   }
 
   function viewLectures() {
@@ -1087,10 +1503,16 @@
     const p = POINT[pid] || { name: l.pointName, module: l.module };
     const m = MOD[p.module] || { name: '', color: '#C0503A' };
     const done = lecDoneCount(pid);
-    const voice = pickZhVoice();
-    const voiceHint = !('speechSynthesis' in window)
-      ? '当前浏览器不支持朗读，可看文字稿'
-      : (voice ? '朗读使用系统中文语音' : '系统未检测到中文语音，朗读效果可能不准');
+    const ttsCfg = S.settings.tts || { provider: 'system' };
+    const cloudOn = ttsCfg.provider !== 'system' && !!ttsCfg.voice;
+    const cloudP = cloudOn ? ttsProvider(ttsCfg.provider) : null;
+    const cloudV = cloudOn ? ttsVoice(cloudP, ttsCfg.voice) : null;
+    const sysVoice = pickZhVoice();
+    const voiceHint = cloudOn
+      ? `云端音色：${cloudP.short} · ${cloudV.name} · ${ttsCfg.rate}x。合成失败会自动回退系统语音`
+      : (!('speechSynthesis' in window)
+        ? '当前浏览器不支持系统朗读，可看文字稿'
+        : (sysVoice ? '朗读使用系统中文语音' : '系统未检测到中文语音，朗读效果可能不准'));
 
     const secs = l.sections.map((sec, i) => {
       let inner = '';
@@ -1129,17 +1551,20 @@
             <div class="spread small"><span>本讲进度</span><b id="lecProgText">已学 ${done} / 5 节</b></div>
             <div class="bar" style="margin-top:6px"><i id="lecProgBar" style="width:${done / 5 * 100}%"></i></div>
           </div>
-          <div class="lec-side-ctrl">
-            <label class="tiny muted">语速</label>
-            <select class="input sm" data-set="lectureRate">
-              ${[0.8, 1, 1.2, 1.4].map((r) => `<option value="${r}" ${Number(S.lectureRate) === r ? 'selected' : ''}>${r}x</option>`).join('')}
-            </select>
-          </div>
+          ${cloudOn
+            ? `<div class="lec-side-ctrl"><span class="tiny muted">语速 ${ttsCfg.rate}x</span><a class="link small" href="#/voice">换音色</a></div>`
+            : `<div class="lec-side-ctrl">
+                <label class="tiny muted">语速</label>
+                <select class="input sm" data-set="lectureRate">
+                  ${[0.8, 1, 1.2, 1.4].map((r) => `<option value="${r}" ${Number(S.lectureRate) === r ? 'selected' : ''}>${r}x</option>`).join('')}
+                </select>
+              </div>`}
           <div class="row" style="margin-top:10px">
             <button class="btn sm primary" data-action="lec-read" data-val="0" data-pid="${pid}">朗读第一节</button>
             <button class="btn sm ghost" data-action="lec-stop">停止</button>
+            <a class="btn sm ghost" href="#/voice">试听/换音色</a>
           </div>
-          <div class="hint" style="margin-top:10px">${voiceHint}。朗读只在你的设备上运行，不消耗 AI 额度。</div>
+          <div class="hint" style="margin-top:10px">${voiceHint}。${cloudOn ? '按字符计费，不消耗 AI 对话额度。' : '不消耗 AI 额度。'}</div>
           <div class="lec-side-note">虚拟讲师，形象由 AI 生成，声音由系统语音合成，不是真人录制。讲稿为原创改写，例题由脚本复算。</div>
         </aside>
 
@@ -1681,6 +2106,9 @@
     const ai = S.settings.ai;
     const u = S.aiUsage;
     const imported = S.imported.length;
+    const ttsCfg = S.settings.tts || { provider: 'system' };
+    const ttsP = ttsCfg.provider === 'system' ? null : ttsProvider(ttsCfg.provider);
+    const ttsV = ttsP ? ttsVoice(ttsP, ttsCfg.voice) : null;
     return `<div class="fade-in">
       <div class="page-head"><div><h1 class="page-title">设置</h1><div class="page-sub">记录存在本机浏览器；定期导出备份</div></div></div>
 
@@ -1701,6 +2129,13 @@
 
       <section class="card card-pad" style="margin-bottom:14px">
         ${aiSettingsHtml()}
+      </section>
+
+      <section class="card card-pad" style="margin-bottom:14px">
+        <div class="spread"><h3 class="card-title" style="margin:0">语音讲解</h3>
+          <span class="tag">${ttsP ? esc(ttsP.short) + ' · ' + esc(ttsV.name) : '系统语音'}</span></div>
+        <p class="hint">讲师精讲的朗读音色。在线语音在服务端合成，密钥不进浏览器；服务不可用时会自动回退系统语音。</p>
+        <div class="row"><a class="btn sm primary" href="#/voice">试听与配置</a><a class="btn sm ghost" href="#/lectures">去讲师精讲</a></div>
       </section>
 
       <section class="card card-pad" style="margin-bottom:14px">
@@ -1741,7 +2176,7 @@
         <h3 class="card-title" style="margin-top:18px">记录与隐私</h3>
         <p>学习记录保存在浏览器 localStorage，不上传服务器。AI 请求会发送到你配置的模型服务商；密钥只存在本机，不写入源码、不随备份导出。</p>
         <h3 class="card-title" style="margin-top:18px">版本</h3>
-        <p>v2.0 · 行测 533 题 · 2026-11-03</p>
+        <p>v2.2 · 行测 533 题 · 2026-11-03 · 在线语音</p>
       </section>
     </div>`;
   }
@@ -1908,6 +2343,7 @@
     else if (path.startsWith('#/lecture/')) html = viewLecture(path.replace('#/lecture/', ''));
     else if (path.startsWith('#/point/')) html = viewPoint(path.replace('#/point/', ''));
     else if (path === '#/stats') html = viewStats();
+    else if (path === '#/voice') html = viewVoice();
     else if (path === '#/ai') html = viewAI(params);
     else if (path === '#/settings') html = viewSettings();
     else if (path === '#/about') html = viewAbout();
@@ -1949,6 +2385,15 @@
     const val = a.getAttribute('data-val');
 
     switch (act) {
+      case 'voice-provider': e.preventDefault(); voicePickProvider(val); break;
+      case 'voice-tone': e.preventDefault(); voicePickTone(val); break;
+      case 'voice-rate': e.preventDefault(); voicePickRate(val); break;
+      case 'voice-preset': e.preventDefault(); voicePickPreset(val); break;
+      case 'voice-select': e.preventDefault(); voicePickVoice(val); break;
+      case 'voice-play': e.preventDefault(); voicePlay(); break;
+      case 'voice-stop': e.preventDefault(); voiceStop(); break;
+      case 'voice-system': e.preventDefault(); voiceSystem(); break;
+      case 'voice-save': e.preventDefault(); voiceSave(); break;
       case 'lec-read': {
         e.preventDefault();
         speakLecture(a.getAttribute('data-pid'), Number(val));
@@ -2222,6 +2667,17 @@
     const r = rec(q.id); r.note = el.value; save();
   });
 
+  document.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'voiceText') {
+      VUI.text = e.target.value;
+      const meta = $('#voiceMeta');
+      const p = ttsProvider(VUI.provider);
+      if (meta) meta.textContent = `${VUI.text.length} 字 · 预计 ¥${ttsPrice(p, VUI.text.length).toFixed(4)}`;
+      return;
+    }
+    if (e.target && e.target.id === 'voiceAudio') return;
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.target.id === 'aiInput' && e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault(); sendAI(e.target.value); return;
@@ -2266,6 +2722,8 @@
   /* ---------------- 启动 ---------------- */
   applyTheme();
   render();
+
+  fetchTTSStatus();
 
   (async function checkCloudOnBoot() {
     if (!cloudReady()) return;

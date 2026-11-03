@@ -501,7 +501,7 @@
     const chosen = CURRENT.answers[q.id];
     const answered = typeof chosen === 'number';
     const isMock = CURRENT.mode === 'mock';
-    const showFb = answered && !isMock && (S.settings.instant || CURRENT.mode === 'review');
+    const showFb = (answered || CURRENT.mode === 'review') && !isMock && (S.settings.instant || CURRENT.mode === 'review');
     const m = q.materialId ? MATERIAL[q.materialId] : null;
     const r = S.records[q.id] || {};
 
@@ -568,11 +568,12 @@
   }
 
   function feedbackHtml(q, chosen, r) {
-    const ok = chosen === q.answer;
+    const reviewOnly = typeof chosen !== 'number';
+    const ok = !reviewOnly && chosen === q.answer;
     const notes = (q.optionNotes || []).map((t, i) =>
       `<li class="${i === q.answer ? 'right' : ''}"><b>${'ABCD'[i]}</b><span>${esc(t)}</span></li>`).join('');
     return `<div class="feedback">
-      <div class="verdict ${ok ? 'ok' : 'no'}">${ok ? '✓ 答对了' : '✕ 答错了'} <span class="tag ${ok ? 'good' : 'bad'}">正确答案 ${'ABCD'[q.answer]}</span></div>
+      <div class="verdict ${reviewOnly ? '' : (ok ? 'ok' : 'no')}">${reviewOnly ? '题目回顾' : (ok ? '✓ 答对了' : '✕ 答错了')} <span class="tag ${reviewOnly ? '' : (ok ? 'good' : 'bad')}">正确答案 ${'ABCD'[q.answer]}</span></div>
       <div class="fb-block"><h5>解析</h5><div class="fb-text">${esc(q.explain).replace(/\n/g, '<br>')}</div></div>
       ${notes ? `<div class="fb-block"><h5>选项分析</h5><ul class="opt-notes">${notes}</ul></div>` : ''}
       ${q.method ? `<div class="fb-block"><h5>方法</h5><div class="method-box">${esc(q.method)}</div></div>` : ''}
@@ -1159,7 +1160,7 @@
 
     if (ai.proxy !== 'direct' && location.protocol.startsWith('http')) {
       try {
-        const r = await fetch('api/ai/chat', {
+        const r = await fetch('/api/ai/chat', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(Object.assign({ endpoint: base, key }, payload))
         });
@@ -1476,7 +1477,7 @@
         <h3 class="card-title" style="margin-top:18px">记录与隐私</h3>
         <p>学习记录保存在浏览器 localStorage，不上传服务器。AI 请求会发送到你配置的模型服务商；密钥只存在本机，不写入源码、不随备份导出。</p>
         <h3 class="card-title" style="margin-top:18px">版本</h3>
-        <p>v1.0 · 行测 104 题 · 2026-11-02</p>
+        <p>v2.0 · 行测 538 题 · 2026-11-03</p>
       </section>
     </div>`;
   }

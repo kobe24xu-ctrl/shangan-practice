@@ -554,3 +554,71 @@ textarea.input { resize: vertical; min-height: 76px; line-height: 1.6; }
   .wrap { padding-bottom: 88px; }
   .bn-item { font-size: 10px; }
 }
+
+/* ---------------- 在线语音试听 ---------------- */
+.voice-alert {
+  display: flex; flex-direction: column; gap: 4px; padding: 12px 16px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  margin-bottom: 14px; font-size: 13px; line-height: 1.65;
+}
+.voice-alert b { font-size: 13.5px; }
+.voice-alert span { color: var(--muted); }
+.voice-alert.warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--surface)); }
+.voice-alert.ok { border-color: var(--ok, #4F7A5B); background: color-mix(in srgb, var(--ok, #4F7A5B) 7%, var(--surface)); }
+.voice-alert code { font-family: var(--mono); font-size: 12px; background: var(--bg2); padding: 1px 5px; border-radius: 4px; }
+
+.voice-panel { padding: 18px 20px; margin-bottom: 16px; }
+.voice-controls { display: grid; grid-template-columns: 1.2fr 1.4fr 1fr; gap: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.vc-group label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
+.voice-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.voice-card {
+  position: relative; text-align: left; cursor: pointer; font: inherit; color: inherit;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  padding: 12px 13px 10px; display: grid; grid-template-columns: auto 1fr; gap: 3px 8px;
+  transition: border-color .15s, background .15s, transform .15s;
+}
+.voice-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.voice-card.on { border-color: var(--accent); background: var(--accent-soft); }
+.vc-gender {
+  grid-row: span 2; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 11px; color: #fff; background: var(--muted); align-self: start;
+}
+.vc-gender.female { background: #C05A78; }
+.vc-gender.male { background: #3E6B8C; }
+.voice-card b { font-size: 14px; }
+.vc-style { font-size: 11.5px; color: var(--accent); }
+.voice-card small { grid-column: 1 / -1; color: var(--muted); font-size: 11.5px; line-height: 1.55; margin-top: 4px; }
+.vc-play { grid-column: 1 / -1; margin-top: 8px; font-size: 11.5px; color: var(--accent); font-weight: 600; }
+
+.voice-layout { display: grid; grid-template-columns: minmax(0, 1fr) 286px; gap: 16px; }
+.voice-text { width: 100%; min-height: 158px; resize: vertical; line-height: 1.85; font-size: 14px; font-family: inherit; }
+.voice-meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+.voice-msg { min-height: 22px; margin-top: 10px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.voice-msg.ok { color: var(--ok, #4F7A5B); }
+.voice-msg.bad { color: var(--bad, #B4453B); }
+#voiceAudio { width: 100%; margin-top: 8px; height: 38px; }
+
+.voice-side .voice-price { margin: 6px 0 2px; }
+.voice-side .voice-price b { font-family: var(--serif); font-size: 34px; }
+.voice-side .voice-price span { font-size: 12px; color: var(--muted); margin-left: 4px; }
+.voice-cost-row { display: flex; justify-content: space-between; align-items: baseline; margin: 12px 0 4px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 12.5px; }
+.voice-cost-row b { color: var(--accent); }
+.voice-side hr { border: 0; border-top: 1px dashed var(--line); margin: 14px 0 10px; }
+.voice-side .small { line-height: 1.8; }
+.voice-side-note { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 11px; color: var(--muted); line-height: 1.6; }
+.voice-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.voice-compare div { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); }
+.voice-compare b { display: block; font-size: 13.5px; margin-bottom: 4px; }
+.voice-compare span { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+
+@media (max-width: 860px) {
+  .voice-controls { grid-template-columns: 1fr; gap: 12px; }
+  .voice-grid { grid-template-columns: 1fr 1fr; }
+  .voice-layout { grid-template-columns: 1fr; }
+  .voice-compare { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  .voice-card { padding: 10px 10px 8px; }
+  .voice-card small { font-size: 11px; }
+}
+html[data-theme="dark"] #voiceAudio { color-scheme: dark; }

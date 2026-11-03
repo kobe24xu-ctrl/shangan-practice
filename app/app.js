@@ -460,7 +460,7 @@
   function viewQuiz(params) {
     if (params.get('review')) {
       const id = params.get('review');
-      if (QMAP[id]) {
+      if (QMAP[id] && !(CURRENT && CURRENT.mode === 'review' && CURRENT.qids.length === 1 && CURRENT.qids[0] === id)) {
         CURRENT = { id: uid(), mode: 'review', qids: [id], i: 0, answers: {}, flags: {}, startTs: now(), lastTs: now(), limitSec: 0, done: 0, total: 1 };
         saveCurrent();
         return renderQuiz();
@@ -987,6 +987,7 @@
     try {
       const url = SECURITY.endpoint(c.url) + '/rest/v1/sas_state?on_conflict=code';
       const r = await fetch(url, {
+        redirect: 'error',
         method: 'POST',
         headers: Object.assign(cloudHeaders(), { Prefer: 'resolution=merge-duplicates,return=minimal' }),
         body: JSON.stringify([{ code: c.code, payload: cloudPayload(), updated_at: new Date().toISOString() }])
@@ -1007,7 +1008,7 @@
     CLOUD_BUSY = true; CLOUD_SUPPRESS = true;
     try {
       const url = SECURITY.endpoint(c.url) + '/rest/v1/sas_state?code=eq.' + encodeURIComponent(c.code) + '&select=payload,updated_at';
-      const r = await fetch(url, { headers: cloudHeaders() });
+      const r = await fetch(url, { redirect: 'error', headers: cloudHeaders() });
       if (!r.ok) throw new Error('读取失败：' + (await r.text()).slice(0, 160));
       const rows = await r.json();
       if (!rows.length) throw new Error('云端还没有记录，先上传一次');
@@ -1143,6 +1144,7 @@
     if (ai.proxy !== 'direct' && location.protocol.startsWith('http')) {
       try {
         const r = await fetch('api/ai/chat', {
+          redirect: 'error',
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(Object.assign({ endpoint: base, key }, payload))
         });
@@ -1159,6 +1161,7 @@
     let r;
     try {
       r = await fetch(base + '/chat/completions', {
+        redirect: 'error',
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
         body: JSON.stringify(payload)

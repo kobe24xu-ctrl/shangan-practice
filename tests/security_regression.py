@@ -10,7 +10,7 @@ import json
 import os
 from pathlib import Path
 import threading
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -23,6 +23,8 @@ origin = f'http://127.0.0.1:{server.server_port}'
 passed = []
 requests = []
 remote_payload = None
+ai_usage = {"prompt_tokens": 1, "completion_tokens": 1}
+redirect_requests = False
 
 def check(condition, label):
     assert condition, label
@@ -53,11 +55,14 @@ try:
                 route.continue_()
                 return
             requests.append({'url': req.url, 'method': req.method, 'body': req.post_data, 'headers': req.headers})
+            if redirect_requests and ('/rest/v1/sas_state' in req.url or '/chat/completions' in req.url or '/api/ai/chat' in req.url):
+                route.fulfill(status=302, headers={'Location': 'https://redirect-target.invalid/stolen', 'Access-Control-Allow-Origin': '*'})
+                return
             if '/rest/v1/sas_state' in req.url:
                 body = json.dumps([{'updated_at': '2026-11-03T00:00:00Z', 'payload': remote_payload}]) if remote_payload is not None else '[]'
                 route.fulfill(status=200, content_type='application/json', body=body)
             elif '/chat/completions' in req.url or '/api/ai/chat' in req.url:
-                route.fulfill(status=200, content_type='application/json', body=json.dumps({'choices': [{'message': {'content': 'synthetic response'}}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 1}}))
+                route.fulfill(status=200, content_type='application/json', body=json.dumps({'choices': [{'message': {'content': 'synthetic response'}}], 'usage': ai_usage}))
             else:
                 route.fulfill(status=200, content_type='text/plain', body='blocked by test')
         context.route('**/*', route_request)
@@ -98,12 +103,15 @@ try:
         malicious = '<img src="https://attacker.invalid/steal" onerror="window.__xss=1">'
         q = {'id': 'safe-import-001', 'module': 'ziliao', 'point': 'zl-zonghe', 'difficulty': 2, 'stem': malicious + '<b>Question</b><svg viewBox="0 0 20 20"><circle cx="5" cy="5" r="4"/></svg>', 'options': ['A', 'B'], 'answer': 1}
         invalid = [dict(q, id='x" onclick="alert(1)'), dict(q, id='constructor'), dict(q, id='bad-fraction', answer=0.5), dict(q, id='bad-difficulty', difficulty=999), dict(q, id='bad-module', module='unknown')]
+        prototype_ids = page.evaluate('Object.getOwnPropertyNames(Object.prototype)') + ['prototype']
+        invalid += [dict(q, id=bad_id) for bad_id in prototype_ids]
         file_import(page, 'import-bank', {'questions': [q, q] + invalid})
         imported = state(page)['imported']
         check(len(imported) == 1 and imported[0]['id'] == q['id'], 'File import rejects hostile IDs, duplicate IDs, invalid answers, difficulty and modules')
         page.goto(origin + '/app/#/quiz?review=' + q['id'])
         check(page.locator('.q-stem svg circle').count() == 1 and page.locator('.q-stem img').count() == 0, 'Imported question renders safely and preserves its SVG')
         page.locator('[data-action="choose"][data-val="1"]').click()
+        expect(page.locator('.verdict.ok')).to_be_visible()
         check(page.locator('.verdict.ok').count() == 1, 'Imported question remains answerable')
         check(page.evaluate('window.__xss || 0') == 0 and requests == [], 'Imported stored XSS never executes or exfiltrates')
 
@@ -111,6 +119,7 @@ try:
         page.goto(origin + '/app/#/quiz?review=pd-tx-01')
         check(page.locator('.q-stem svg').count() == 4, 'All four built-in geometric figures still render')
         page.locator('[data-action="choose"][data-val="2"]').click()
+        expect(page.locator('.verdict.ok')).to_be_visible()
         check(page.locator('.verdict.ok').count() == 1, 'Built-in question answer and feedback work')
         for route in ['home', 'practice', 'exam', 'wrong', 'fav', 'graph', 'point/zl-zonghe', 'stats', 'ai', 'settings', 'about']:
             page.goto(origin + '/app/#/' + route)
@@ -154,7 +163,9 @@ try:
         incoming['imported'] = [q] + invalid
         incoming['settings']['goal'] = '\" onfocus=window.__xss=1 x=\"'
         incoming['daily'] = {'2026-11-03': {'answered': malicious, 'right': 1}}
-        incoming['records'] = {'zl-bz-01': {'seen': malicious, 'right': malicious}}
+        incoming['records'] = {'pd-tx-01': {'seen': malicious, 'right': malicious, 'reasons': {'审题偏差': 2, '计算失误': -1, '时间不够': 0, '完全没思路': malicious}}}
+        incoming['examCfg'] = {'count': 20, 'min': 25, 'off': ['ziliao', 'constructor', 'not-a-module']}
+        incoming['aiUsage'].update(tin=malicious, tout=malicious, credits=malicious)
         requests.clear()
         # Schedule an upload first; restore must cancel it.
         page.clock.install()
@@ -186,6 +197,61 @@ try:
         page.wait_for_timeout(100)
         payload = json.loads(requests[0]['body'])[0]['payload']
         check('cloud' not in payload and 'ai' not in payload['settings'], 'Explicit sync payload excludes connection configurations')
+
+        # Cached state uses the same boundary, while valid study configuration survives.
+        seed(page, incoming)
+        cached = state(page)
+        check([item['id'] for item in cached['imported']] == [q['id']], 'Cached state rejects all Object.prototype IDs and invalid imported questions')
+        check(cached['records']['pd-tx-01']['reasons'] == {'审题偏差': 2}, 'Only positive known mistake-reason counts survive cache normalization')
+        check(cached['examCfg'] == {'count': 20, 'min': 25, 'off': ['ziliao']}, 'Mock exam count, duration and excluded modules survive normalization')
+        page.goto(origin + '/app/#/quiz?review=safe-import-001')
+        expect(page.locator('.q-stem svg circle')).to_have_count(1)
+        check(page.locator('.q-stem img').count() == 0 and page.evaluate('window.__xss || 0') == 0, 'Cached hostile question renders inertly with original SVG')
+
+        # Exercise both actual AI response handling paths with synthetic usage.
+        for provider in ['custom', 'wb']:
+            for value_name, value in [('html', malicious), ('negative', -7), ('huge', 1e100)]:
+                clean = copy.deepcopy(baseline)
+                clean['settings']['ai'].update(provider=provider, key='FAKE_USAGE_KEY', remember=True, proxy='direct', base='https://trusted-ai.invalid/v1', model='fake-model', cloudEndpoint='https://trusted-wb.invalid', publishableKey='wbpk_FAKE', cloudModel='fake-model')
+                seed(page, clean, '#/ai')
+                ai_usage = dict(prompt_tokens=value, completion_tokens=value, credit=value)
+                page.evaluate("""usage => { window.WorkBuddyCloud = {createWorkBuddyCloud: () => ({llm: {chat: {completions: {create: async function* () {yield {choices: [{delta: {content: 'synthetic response'}}], usage};}}}}})}; }""", ai_usage)
+                page.locator('#aiInput').fill('synthetic usage test')
+                page.locator('[data-action="ai-send"]').click()
+                page.wait_for_function("JSON.parse(localStorage.getItem('sas.state.v1')).aiUsage.calls === 1")
+                page.goto(origin + '/app/#/settings')
+                expect(page.locator('[data-set="goal"]')).to_be_visible()
+                usage = state(page)['aiUsage']
+                expected = 1e15 if value_name == 'huge' else 0
+                check(usage['tin'] == expected and usage['tout'] == expected and (provider != 'wb' or usage['credits'] == expected) and page.locator('img[src*="attacker"]').count() == 0 and page.evaluate('window.__xss || 0') == 0, f'{provider} AI {value_name} usage cannot inject HTML and is bounded')
+
+        # A late model-list response must not mutate restored state or schedule sync.
+        local['settings']['ai']['provider'] = 'wb'
+        seed(page, local)
+        page.evaluate("""() => { window.WorkBuddyCloud = {createWorkBuddyCloud: () => ({llm: {models: {list: () => new Promise(resolve => {window.finishModels = resolve;})}}})}; }""")
+        page.locator('[data-action="wb-models"]').click()
+        page.wait_for_function("typeof window.finishModels === 'function'")
+        requests.clear()
+        file_import(page, 'import-backup', {'type': 'sas-backup', 'state': incoming})
+        before_models = state(page)['settings']['ai']
+        page.evaluate("window.finishModels([{id: 'stale-model', name: 'stale model'}])")
+        page.wait_for_function("document.body.innerText.includes('学习数据已恢复')")
+        page.clock.fast_forward(11000)
+        check(state(page)['settings']['ai'] == before_models and requests == [], 'Late WorkBuddy model results cannot change restored connection or trigger uploads')
+        check(state(page)['records']['pd-tx-01']['reasons'] == {'审题偏差': 2} and state(page)['examCfg']['off'] == ['ziliao'], 'Backup restore preserves positive mistake counts and mock exam exclusions')
+
+        # Real browser fetch redirect handling with fully intercepted 302 responses.
+        local['settings']['ai'].update(provider='custom', model='fake-model', proxy='direct')
+        for action, proxy in [('cloud-push', 'direct'), ('cloud-test', 'direct'), ('ai-test', 'direct'), ('ai-test', 'proxy')]:
+            local['settings']['ai']['proxy'] = proxy
+            seed(page, local)
+            requests.clear()
+            redirect_requests = True
+            with page.expect_event('requestfailed'):
+                page.locator(f'[data-action="{action}"]').click()
+            page.wait_for_timeout(100)
+            check(len(requests) == 1 and not any('redirect-target.invalid' in request['url'] for request in requests), f'{action} ({proxy}) rejects credential-bearing redirects before destination request')
+            redirect_requests = False
 
         endpoint_checks = page.evaluate('''() => ['javascript:alert(1)', 'http://remote.invalid', 'https://u:p@remote.invalid', 'https://remote.invalid/?secret=x', 'https://remote.invalid/#x'].every(x => !SAS_SECURITY.endpoint(x)) && !!SAS_SECURITY.endpoint('https://valid.invalid/v1') && !!SAS_SECURITY.endpoint('http://localhost:8787')''')
         check(endpoint_checks, 'Connection validation blocks insecure remote URLs, credentials, query strings and fragments')

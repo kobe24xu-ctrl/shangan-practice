@@ -65,13 +65,13 @@
     const materials = [];
     const questions = [];
     let rejected = 0;
-    for (const raw of array(d.points, 1000)) {
+    for (const raw of array(d.points, Infinity)) {
       const p = object(raw);
       if (!validId(p.id) || pointMap.has(p.id) || !modules.has(p.module) || !text(p.name)) continue;
       points.push({ id: p.id, module: p.module, name: text(p.name, 200), summary: text(p.summary), methods: strings(p.methods), traps: strings(p.traps), refs: array(p.refs, 100).map((r) => ({ course: text(object(r).course), teacher: text(object(r).teacher), pdf: text(object(r).pdf), page: text(object(r).page) })) });
       pointMap.set(p.id, p.module);
     }
-    for (const raw of array(d.materials, 1000)) {
+    for (const raw of array(d.materials, Infinity)) {
       const m = object(raw);
       if (!validId(m.id) || materialIds.has(m.id)) continue;
       const clean = { id: m.id, title: text(m.title, 200), kind: text(m.kind, 100), body: text(m.body, 100000), note: text(m.note) };
@@ -81,7 +81,7 @@
       materials.push(clean); materialIds.add(m.id);
     }
     const source = Array.isArray(input) ? input : d.questions;
-    for (const raw of array(source, 5000)) {
+    for (const raw of array(source, Infinity)) {
       const q = object(raw);
       const module = q.module == null ? 'ziliao' : q.module;
       const point = q.point == null ? 'zl-zonghe' : q.point;
@@ -96,7 +96,7 @@
     return { questions, points, materials, rejected };
   }
 
-  function safeMap(value, keyCheck, convert, max = 10000) {
+  function safeMap(value, keyCheck, convert, max = Infinity) {
     const out = {};
     for (const [key, raw] of Object.entries(object(value)).slice(0, max)) {
       if (keyCheck(key)) out[key] = convert(object(raw));

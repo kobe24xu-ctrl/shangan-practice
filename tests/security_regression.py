@@ -253,6 +253,23 @@ try:
             check(len(requests) == 1 and not any('redirect-target.invalid' in request['url'] for request in requests), f'{action} ({proxy}) rejects credential-bearing redirects before destination request')
             redirect_requests = False
 
+        # Legacy and backup banks above new-import limits remain intact.
+        oversized = copy.deepcopy(baseline)
+        oversized['imported'] = [dict(q, id=f'legacy-{i}', stem='synthetic') for i in range(5001)]
+        oversized['importedMeta'] = {'points': [{'id': f'point-{i}', 'module': 'ziliao', 'name': 'synthetic'} for i in range(1001)], 'materials': [{'id': f'material-{i}', 'title': 'synthetic', 'body': 'synthetic'} for i in range(1001)]}
+        oversized['records'] = {'legacy-5000': {'seen': 1, 'right': 1}}
+        seed(page, oversized)
+        saved = state(page)
+        check(len(saved['imported']) == 5001 and len(saved['importedMeta']['points']) == 1001 and len(saved['importedMeta']['materials']) == 1001 and saved['records']['legacy-5000']['seen'] == 1, 'Legacy oversized cache retains all valid questions, metadata and linked records')
+        before = state(page)
+        file_import(page, 'import-bank', {'questions': [dict(q, id='over-limit')]})
+        check(state(page) == before, 'Cumulative over-limit import is rejected atomically')
+        check('累计导入上限' in page.locator('body').inner_text(), 'Cumulative limit rejection explains limits to user')
+        seed(page, baseline)
+        file_import(page, 'import-backup', {'type': 'sas-backup', 'state': oversized})
+        restored_large = state(page)
+        check(len(restored_large['imported']) == 5001 and len(restored_large['importedMeta']['points']) == 1001 and len(restored_large['importedMeta']['materials']) == 1001 and restored_large['records']['legacy-5000']['seen'] == 1, 'Oversized backup restores all valid bank data without truncation')
+
         endpoint_checks = page.evaluate('''() => ['javascript:alert(1)', 'http://remote.invalid', 'https://u:p@remote.invalid', 'https://remote.invalid/?secret=x', 'https://remote.invalid/#x'].every(x => !SAS_SECURITY.endpoint(x)) && !!SAS_SECURITY.endpoint('https://valid.invalid/v1') && !!SAS_SECURITY.endpoint('http://localhost:8787')''')
         check(endpoint_checks, 'Connection validation blocks insecure remote URLs, credentials, query strings and fragments')
         check(not errors, 'Entire regression suite finishes without uncaught browser errors')

@@ -1561,6 +1561,7 @@
           const newPoints = checked.points;
           const newMats = checked.materials;
           if (!ok.length) throw new Error('没有通过安全校验的题目，请检查 ID、模块、知识点、选项与整数答案');
+          if (S.imported.length + ok.length > 5000 || S.importedMeta.points.length + newPoints.length > 1000 || S.importedMeta.materials.length + newMats.length > 1000) throw new Error('累计导入上限为 5000 题、1000 个知识点、1000 份材料；本次未导入任何数据');
           S.imported = S.imported.concat(ok);
           S.importedMeta.points = S.importedMeta.points.concat(newPoints);
           S.importedMeta.materials = S.importedMeta.materials.concat(newMats);

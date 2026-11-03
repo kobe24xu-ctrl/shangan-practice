@@ -258,9 +258,12 @@ try:
         oversized['imported'] = [dict(q, id=f'legacy-{i}', stem='synthetic') for i in range(5001)]
         oversized['importedMeta'] = {'points': [{'id': f'point-{i}', 'module': 'ziliao', 'name': 'synthetic'} for i in range(1001)], 'materials': [{'id': f'material-{i}', 'title': 'synthetic', 'body': 'synthetic'} for i in range(1001)]}
         oversized['records'] = {'legacy-5000': {'seen': 1, 'right': 1}}
+        oversized['aiChat'] = [{'role': 'user' if i % 2 == 0 else 'assistant', 'content': f'synthetic history {i}', 'at': i} for i in range(205)]
+        oversized['sessions'] = [{'id': f'session-{i}', 'mode': 'review', 'items': [{'qid': 'legacy-5000', 'chosen': 1}], 'at': i} for i in range(125)]
         seed(page, oversized)
         saved = state(page)
         check(len(saved['imported']) == 5001 and len(saved['importedMeta']['points']) == 1001 and len(saved['importedMeta']['materials']) == 1001 and saved['records']['legacy-5000']['seen'] == 1, 'Legacy oversized cache retains all valid questions, metadata and linked records')
+        check(saved['aiChat'] == oversized['aiChat'] and len(saved['sessions']) == 125, 'Cache migration preserves complete chat above 200 messages, including oldest and newest, and session history')
         before = state(page)
         file_import(page, 'import-bank', {'questions': [dict(q, id='over-limit')]})
         check(state(page) == before, 'Cumulative over-limit import is rejected atomically')
@@ -269,6 +272,8 @@ try:
         file_import(page, 'import-backup', {'type': 'sas-backup', 'state': oversized})
         restored_large = state(page)
         check(len(restored_large['imported']) == 5001 and len(restored_large['importedMeta']['points']) == 1001 and len(restored_large['importedMeta']['materials']) == 1001 and restored_large['records']['legacy-5000']['seen'] == 1, 'Oversized backup restores all valid bank data without truncation')
+
+        check(restored_large['aiChat'] == oversized['aiChat'] and len(restored_large['sessions']) == 125, 'Backup restore preserves all chat messages and sessions without silent history loss')
 
         endpoint_checks = page.evaluate('''() => ['javascript:alert(1)', 'http://remote.invalid', 'https://u:p@remote.invalid', 'https://remote.invalid/?secret=x', 'https://remote.invalid/#x'].every(x => !SAS_SECURITY.endpoint(x)) && !!SAS_SECURITY.endpoint('https://valid.invalid/v1') && !!SAS_SECURITY.endpoint('http://localhost:8787')''')
         check(endpoint_checks, 'Connection validation blocks insecure remote URLs, credentials, query strings and fragments')

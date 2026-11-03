@@ -9,7 +9,9 @@
   const shapeClasses = new Set('figrow figitem figbox fig'.split(' '));
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) ? v : {};
-  const array = (v, max) => Array.isArray(v) ? v.slice(0, max) : [];
+  // Quantity limits belong at explicit import admission, never at migration.
+  // Validate every existing item so saving cannot discard valid history.
+  const array = (v) => Array.isArray(v) ? v : [];
   const text = (v, max = 20000) => typeof v === 'string' ? v.slice(0, max) : '';
   const number = (v, fallback = 0, max = 1e15) => typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(max, v)) : fallback;
   const strings = (v, max = 100) => array(v, max).filter((x) => typeof x === 'string').map((x) => text(x));

@@ -28,6 +28,7 @@
     <b>目录</b>
     <a href="#open">打开方式</a>
     <a href="#practice">做题与记录</a>
+    <a href="#lecture">讲师精讲</a>
     <a href="#ai">配置 AI</a>
     <a href="#cloud">云同步</a>
     <a href="#backup">备份与恢复</a>
@@ -66,7 +67,19 @@
     </ul>
     <p>键盘操作：<code>A/B/C/D</code> 选项，<code>←</code> <code>→</code> 切题。</p>
 
-    <h2 id="ai">三、配置 AI</h2>
+    <h2 id="lecture">三、讲师精讲与朗读</h2>
+    <p>侧栏「讲师精讲」、知识点页的「听林岸讲」、首页横幅，都能进入。29 个知识点各一讲，每讲固定五节：先说为什么、核心就这几句、跟我做一道、最容易错的地方、一句话带走。</p>
+    <h3>怎么用</h3>
+    <ul>
+      <li>先听或先读一遍，再点「练这个考点」，直接进该知识点的专项练习；</li>
+      <li>每节右下角可以「标记已学」，进度存在本机，列表里会显示「已学 x/5」；</li>
+      <li>「朗读本节」调用浏览器自带的中文语音，不联网、不消耗 AI 额度；语速可选 0.8—1.4 倍；</li>
+      <li>「问 AI 追问」会把当前知识点的定义、方法、易错点一起带给模型，并预填一句“再讲通俗一点”。</li>
+    </ul>
+    <div class="note">朗读效果取决于系统有没有中文语音。Windows 一般自带；部分 Linux 或精简版系统需要先安装中文语音包。没有语音时，文字稿和例题仍可正常使用。</div>
+    <p>讲师「林岸」是虚拟人物：形象由 AI 生成，声音由系统语音合成，不是真人录制。讲稿是按粉笔国考 980 课程结构重写的原创内容，计算例题由脚本复算；遇到有争议的题会标注「存疑」，不会硬给一个确定答案。</p>
+
+    <h2 id="ai">四、配置 AI</h2>
     <p>设置 → AI 模型，有两种接法，随时可切换。</p>
 
     <h3>A. 自带 API 密钥</h3>
@@ -101,7 +114,7 @@
       <li>对话只带最近 10 轮上下文。</li>
     </ul>
 
-    <h2 id="cloud">四、云同步（Supabase）</h2>
+    <h2 id="cloud">五、云同步（Supabase）</h2>
     <p>线上版没有后端，记录默认只在本机。要让手机和电脑共用一份，用一个免费的 Supabase 项目：</p>
     <ol>
       <li>打开 <a href="https://supabase.com" target="_blank" rel="noreferrer">supabase.com</a>，用 GitHub 登录，新建项目（区域选 Singapore 或 Tokyo）；</li>
@@ -128,7 +141,7 @@ create policy "sas_update" on public.sas_state for update to anon
     <div class="note">anon key 是公开凭据，可以填；数据库密码和 service_role key 绝对不要填进页面。同步密钥相当于这组数据的密码，丢了就恢复不了云端记录。</div>
     <p>同步是整份覆盖、最后写入者赢，没有自动合并；上传内容不含 AI 密钥和聊天记录。</p>
 
-    <h2 id="backup">五、备份与恢复</h2>
+    <h2 id="backup">六、备份与恢复</h2>
     <p>记录存在浏览器的 <code>localStorage</code>，键名 <code>sas.state.v1</code>。清缓存、换浏览器、换设备都会丢，所以：</p>
     <ul>
       <li><b>导出备份</b>：设置 → 导出学习备份，得到 JSON（含记录、错题、收藏、笔记、设置；不含密钥）。</li>
@@ -136,7 +149,7 @@ create policy "sas_update" on public.sas_state for update to anon
       <li><b>建议</b>：每学一周导一次，文件放网盘或发给自己。</li>
     </ul>
 
-    <h2 id="import">六、导入题库</h2>
+    <h2 id="import">七、导入题库</h2>
     <p>设置 → 导入题库，选一个 JSON。最小结构：</p>
     <pre>{
   "questions": [{
@@ -154,7 +167,7 @@ create policy "sas_update" on public.sas_state for update to anon
 }</pre>
     <p><code>answer</code> 是选项下标（0 = A）。同一份文件还可以带 <code>points</code> 和 <code>materials</code>，导入后会并入知识图谱。非法条目会被跳过并提示，不会污染题库。</p>
 
-    <h2 id="faq">七、常见问题</h2>
+    <h2 id="faq">八、常见问题</h2>
     <h3>页面空白 / 提示题库未加载</h3>
     <p>确认 <code>app/data/bank.js</code> 与 <code>app/index.html</code> 的相对位置没变。如果是从压缩包里单独拖出 index.html，题库会找不到。</p>
     <h3>AI 提示“直连失败（CORS）”</h3>
@@ -166,7 +179,7 @@ create policy "sas_update" on public.sas_state for update to anon
     <h3>想加题 / 改解析</h3>
     <p>改 <code>tools/</code> 里的数据文件，运行 <code>python build.py</code> 重新生成题库；它会做一致性校验和计算题复算。也可以直接用导入题库功能加题。</p>
 
-    <h2 id="limits">八、已知限制</h2>
+    <h2 id="limits">九、已知限制</h2>
     <ul>
       <li>题库 533 题，覆盖行测六个模块；其中 193 道计算题由脚本独立验算。</li>
       <li>常识、政治理论只到摘要级，题目少；申论未纳入。</li>

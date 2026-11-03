@@ -5,6 +5,11 @@
 (function () {
   'use strict';
 
+  const SECURITY = window.SAS_SECURITY;
+  if (!SECURITY) {
+    document.getElementById('view').textContent = '安全组件未加载，请刷新页面后重试。';
+    return;
+  }
   const BANK = window.BANK;
   if (!BANK) {
     document.getElementById('view').innerHTML =
@@ -42,11 +47,12 @@
   const diffLabel = (d) => ({ 1: '基础', 2: '进阶', 3: '拔高' }[d] || '进阶');
   const diffDots = (d) => '●'.repeat(d) + '○'.repeat(3 - d);
 
+  const BUILTIN_BANK = { modules: BANK.modules.slice(), points: BANK.points.slice(), materials: (BANK.materials || []).slice(), questions: BANK.questions.slice() };
   const MODULES = BANK.modules.slice().sort((a, b) => a.order - b.order);
-  const MOD = Object.fromEntries(MODULES.map((m) => [m.id, m]));
-  const POINT = Object.fromEntries(BANK.points.map((p) => [p.id, p]));
-  const MATERIAL = Object.fromEntries((BANK.materials || []).map((m) => [m.id, m]));
-  const QMAP = Object.fromEntries(BANK.questions.map((q) => [q.id, q]));
+  const MOD = Object.assign(Object.create(null), Object.fromEntries(MODULES.map((m) => [m.id, m])));
+  const POINT = Object.assign(Object.create(null), Object.fromEntries(BANK.points.map((p) => [p.id, p])));
+  const MATERIAL = Object.assign(Object.create(null), Object.fromEntries((BANK.materials || []).map((m) => [m.id, m])));
+  const QMAP = Object.assign(Object.create(null), Object.fromEntries(BANK.questions.map((q) => [q.id, q])));
   const REASONS = ['概念不清', '计算失误', '审题偏差', '时间不够', '完全没思路'];
 
   /* ---------------- 状态 ---------------- */
@@ -100,18 +106,10 @@
     const base = defaults();
     if (!raw) return base;
     try {
-      const s = JSON.parse(raw);
-      const out = Object.assign(base, s);
-      out.settings = Object.assign(base.settings, s.settings || {});
-      out.settings.ai = Object.assign(base.settings.ai, (s.settings || {}).ai || {});
-      out.records = s.records || {};
-      out.sessions = s.sessions || [];
-      out.daily = s.daily || {};
-      out.aiUsage = Object.assign(base.aiUsage, s.aiUsage || {});
-      out.aiChat = s.aiChat || [];
-      out.imported = s.imported || [];
-      out.importedMeta = Object.assign({ points: [], materials: [] }, s.importedMeta || {});
-      out.pending = s.pending || [];
+      const out = SECURITY.normalizeState(JSON.parse(raw), base, BUILTIN_BANK);
+      // Migrate old saved data immediately, including keys retained despite
+      // remember=false. Do not trigger sync while cleaning local storage.
+      try { localStorage.setItem(SKEY, JSON.stringify(SECURITY.persistedState(out))); } catch (e) {}
       return out;
     } catch (e) { return base; }
   }
@@ -125,10 +123,10 @@
   let ROUTE = '#/home';
 
   let CLOUD_SUPPRESS = false;
-  function save() {
+  function save(sync = true) {
     S.lastActive = now();
-    try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) { toast('保存失败：浏览器存储不可用或已满'); }
-    if (!CLOUD_SUPPRESS) cloudSchedule();
+    try { localStorage.setItem(SKEY, JSON.stringify(SECURITY.persistedState(S))); } catch (e) { toast('保存失败：浏览器存储不可用或已满'); }
+    if (sync && !CLOUD_SUPPRESS) cloudSchedule();
   }
   function saveCurrent() {
     try { CURRENT ? localStorage.setItem(CKEY, JSON.stringify(CURRENT)) : localStorage.removeItem(CKEY); } catch (e) {}
@@ -137,10 +135,7 @@
     try {
       const raw = localStorage.getItem(CKEY);
       if (!raw) return null;
-      const c = JSON.parse(raw);
-      if (!c || !c.qids || !c.qids.length) return null;
-      if (c.qids.some((id) => !QMAP[id])) return null;
-      return c;
+      return SECURITY.currentPractice(JSON.parse(raw), QMAP);
     } catch (e) { return null; }
   }
 
@@ -177,27 +172,16 @@
   }
 
   /* ---------------- 导入题库合并 ---------------- */
-  (function mergeImported() {
-    const meta = S.importedMeta || {};
-    (meta.points || []).forEach((p) => {
-      if (p && p.id && !POINT[p.id]) { BANK.points.push(p); POINT[p.id] = p; }
-    });
-    (meta.materials || []).forEach((m) => {
-      if (m && m.id && !MATERIAL[m.id]) { BANK.materials.push(m); MATERIAL[m.id] = m; }
-    });
-    if (!S.imported || !S.imported.length) return;
-    const ids = new Set(BANK.questions.map((q) => q.id));
-    S.imported.forEach((q) => {
-      if (!q || !q.id || ids.has(q.id)) return;
-      if (!Array.isArray(q.options) || typeof q.answer !== 'number') return;
-      const qq = Object.assign({ module: 'ziliao', point: 'zl-zonghe', difficulty: 2, explain: '', optionNotes: [], method: '', traps: [], materialId: null, calc: null, tags: [] }, q);
-      qq.source = qq.source || '用户导入';
-      qq.review = qq.review || { status: 'pending', note: '用户导入，未审核' };
-      BANK.questions.push(qq);
-      QMAP[qq.id] = qq;
-      ids.add(qq.id);
-    });
-  })();
+  function mergeImported() {
+    BANK.points = BUILTIN_BANK.points.concat(S.importedMeta.points);
+    BANK.materials = BUILTIN_BANK.materials.concat(S.importedMeta.materials);
+    BANK.questions = BUILTIN_BANK.questions.concat(S.imported);
+    for (const [map, list] of [[POINT, BANK.points], [MATERIAL, BANK.materials], [QMAP, BANK.questions]]) {
+      Object.keys(map).forEach((key) => { delete map[key]; });
+      list.forEach((item) => { map[item.id] = item; });
+    }
+  }
+  mergeImported();
 
   /* ---------------- 主题 ---------------- */
   function applyTheme() {
@@ -293,7 +277,7 @@
     const weak = weakPoints(3);
     const weakHtml = weak.length ? weak.map((w) => `<div class="weak-row">
         <div><div class="weak-name">${esc(w.name)}</div><div class="tiny muted">${esc(moduleName(w.module))} · 已练 ${w.n} 题</div></div>
-        <div class="row"><span class="weak-val mono">${w.acc}%</span><a class="btn sm ghost" href="#/practice?p=${w.id}">去练</a></div>
+        <div class="row"><span class="weak-val mono">${w.acc}%</span><a class="btn sm ghost" href="#/practice?p=${esc(w.id)}">去练</a></div>
       </div>`).join('') : `<div class="small muted">练几道题后，这里会显示需要补的知识点。</div>`;
 
     const recentWrong = Object.entries(S.records)
@@ -301,7 +285,7 @@
       .sort((a, b) => b[1].wrongAt - a[1].wrongAt).slice(0, 3);
     const rwHtml = recentWrong.length ? recentWrong.map(([id, r]) => {
       const q = QMAP[id]; if (!q) return '';
-      return `<a class="recent-row" href="#/quiz?review=${id}">
+      return `<a class="recent-row" href="#/quiz?review=${esc(id)}">
         <div style="min-width:0"><div class="weak-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(stripHtml(q.stem)).slice(0, 42)}</div>
         <div class="tiny muted">${esc(moduleName(q.module))} · 错 ${r.wrong} 次</div></div>
         <span class="tag bad">回顾</span></a>`;
@@ -405,7 +389,7 @@
         <div class="spread" style="margin-bottom:6px"><div class="card-title" style="margin:0">知识点</div>
           <button class="link small" data-action="setup-clear-points">清空</button></div>
         <div class="row" style="margin-bottom:18px;max-height:168px;overflow:auto">
-          ${pts.length ? pts.map((p) => `<button class="chip ${SETUP.points.includes(p.id) ? 'on' : ''}" data-action="setup-point" data-val="${p.id}">${esc(p.name)}</button>`).join('') : '<span class="small muted">先选模块</span>'}
+          ${pts.length ? pts.map((p) => `<button class="chip ${SETUP.points.includes(p.id) ? 'on' : ''}" data-action="setup-point" data-val="${esc(p.id)}">${esc(p.name)}</button>`).join('') : '<span class="small muted">先选模块</span>'}
           ${pts.length ? '<span class="tiny muted" style="width:100%">不选任何知识点 = 该模块全部</span>' : ''}
         </div>
 
@@ -537,7 +521,7 @@
 
       <section class="card qcard">
         <div class="q-top">
-          <span class="q-no">${q.id.toUpperCase()}</span>
+          <span class="q-no">${esc(q.id.toUpperCase())}</span>
           <span class="tag">${esc(moduleName(q.module))}</span>
           <span class="tag">${esc(pointName(q.point))}</span>
           <span class="tag">${diffLabel(q.difficulty)} ${diffDots(q.difficulty)}</span>
@@ -546,7 +530,7 @@
           <span style="flex:1"></span>
           <button class="btn sm ghost" data-action="fav" title="收藏">${r.fav ? '★ 已收藏' : '☆ 收藏'}</button>
         </div>
-        <div class="q-stem">${q.stem}</div>
+        <div class="q-stem">${SECURITY.safeStem(q.stem)}</div>
         <div class="opts">${opts}</div>
         ${showFb ? feedbackHtml(q, chosen, r) : ''}
         ${answered && !isMock && !S.settings.instant && CURRENT.mode !== 'review' ? `<div class="actions"><button class="btn sm" data-action="show-answer">查看答案与解析</button></div>` : ''}
@@ -678,7 +662,7 @@
       const q = QMAP[it.qid];
       return `<div class="list-item">
         <div class="li-head"><div class="li-meta"><span class="tag">${esc(pointName(q.point))}</span><span>你选 ${it.chosen != null ? 'ABCD'[it.chosen] : '未答'} · 正确 ${'ABCD'[q.answer]}</span></div>
-        <a class="btn sm ghost" href="#/quiz?review=${q.id}">看解析</a></div>
+        <a class="btn sm ghost" href="#/quiz?review=${esc(q.id)}">看解析</a></div>
         <div class="li-title">${esc(stripHtml(q.stem)).slice(0, 80)}</div>
       </div>`;
     }).join('') : `<div class="empty"><b>全对</b>这组题没有错题。</div>`;
@@ -700,7 +684,7 @@
       <div class="grid g2" style="margin-bottom:14px">
         <section class="card card-pad"><h3 class="card-title">各模块</h3>${modRows || '<div class="small muted">—</div>'}</section>
         <section class="card card-pad"><h3 class="card-title">薄弱知识点</h3>
-          ${weak.length ? weak.map((w) => `<div class="weak-row"><div><div class="weak-name">${esc(w.name)}</div><div class="tiny muted">累计正确率 ${w.acc}%</div></div><a class="btn sm ghost" href="#/practice?p=${w.id}">去练</a></div>`).join('') : '<div class="small muted">这组没有明显薄弱点，或样本太少。</div>'}
+          ${weak.length ? weak.map((w) => `<div class="weak-row"><div><div class="weak-name">${esc(w.name)}</div><div class="tiny muted">累计正确率 ${w.acc}%</div></div><a class="btn sm ghost" href="#/practice?p=${esc(w.id)}">去练</a></div>`).join('') : '<div class="small muted">这组没有明显薄弱点，或样本太少。</div>'}
         </section>
       </div>
 
@@ -823,8 +807,8 @@
           <div class="li-head">
             <div class="li-meta"><span class="tag">${esc(moduleName(q.module))}</span><span class="tag">${esc(pointName(q.point))}</span>
             <span>错 ${r.wrong} 次 · ${new Date(r.wrongAt || r.lastAt).toLocaleDateString('zh-CN')}</span></div>
-            <div class="row"><button class="btn sm ghost" data-action="master" data-val="${q.id}">已掌握</button>
-            <a class="btn sm" href="#/quiz?review=${q.id}">重做</a></div>
+            <div class="row"><button class="btn sm ghost" data-action="master" data-val="${esc(q.id)}">已掌握</button>
+            <a class="btn sm" href="#/quiz?review=${esc(q.id)}">重做</a></div>
           </div>
           <div class="li-title">${esc(stripHtml(q.stem)).slice(0, 90)}</div>
           <div class="tiny muted" style="margin-top:6px">正确答案 ${'ABCD'[q.answer]}${r.note ? ' · 笔记：' + esc(r.note) : ''}${Object.keys(r.reasons || {}).length ? ' · 错因：' + esc(Object.keys(r.reasons).join('、')) : ''}</div>
@@ -842,7 +826,7 @@
         const q = QMAP[id]; if (!q) return '';
         return `<div class="list-item"><div class="li-head">
           <div class="li-meta"><span class="tag">${esc(moduleName(q.module))}</span><span class="tag">${esc(pointName(q.point))}</span></div>
-          <div class="row"><button class="btn sm ghost" data-action="fav" data-val="${q.id}">取消收藏</button><a class="btn sm" href="#/quiz?review=${q.id}">重做</a></div></div>
+          <div class="row"><button class="btn sm ghost" data-action="fav" data-val="${esc(q.id)}">取消收藏</button><a class="btn sm" href="#/quiz?review=${esc(q.id)}">重做</a></div></div>
           <div class="li-title">${esc(stripHtml(q.stem)).slice(0, 90)}</div></div>`;
       }).join('')}</section>` : `<div class="card"><div class="empty"><b>还没有收藏</b>题目右上角的星标，点一下就会存到这里。</div></div>`}
     </div>`;
@@ -862,7 +846,7 @@
             const qs = BANK.questions.filter((q) => q.point === p.id);
             const rs = qs.map((q) => S.records[q.id]).filter((r) => r && r.seen);
             const acc = rs.length ? pct(sum(rs, (r) => r.right), sum(rs, (r) => r.seen)) : null;
-            return `<a class="card point-card" href="#/point/${p.id}">
+            return `<a class="card point-card" href="#/point/${esc(p.id)}">
               <div class="pc-top"><h4>${esc(p.name)}</h4><div class="row"><span class="tiny muted mono">${acc === null ? '未练' : acc + '%'}</span><span class="mastery"><i style="width:${acc === null ? 0 : acc}%"></i></span></div></div>
               <div class="pc-meta">${esc(p.summary).slice(0, 52)}… · ${qs.length} 题</div></a>`;
           }).join('')}</div>
@@ -881,7 +865,7 @@
       ${breadcrumb('知识图谱', '#/graph')}
       <div class="page-head"><div><div class="kicker">${esc(moduleName(p.module))}</div><h1 class="page-title">${esc(p.name)}</h1>
       <div class="page-sub">${qs.length} 道题${acc === null ? '' : ' · 你的正确率 ' + acc + '%'}</div></div>
-      <button class="btn primary" data-action="practice-point" data-val="${p.id}">练这个知识点</button></div>
+      <button class="btn primary" data-action="practice-point" data-val="${esc(p.id)}">练这个知识点</button></div>
 
       <section class="card card-pad" style="margin-bottom:14px">
         <h3 class="card-title">一句话概括</h3>
@@ -903,9 +887,9 @@
 
       <section class="card"><div class="card-pad" style="padding-bottom:8px"><h3 class="card-title" style="margin:0">相关题目</h3></div>
         ${qs.map((q) => `<div class="list-item"><div class="li-head">
-          <div class="li-meta"><span class="mono">${q.id.toUpperCase()}</span><span>${diffLabel(q.difficulty)}</span>
+          <div class="li-meta"><span class="mono">${esc(q.id.toUpperCase())}</span><span>${diffLabel(q.difficulty)}</span>
           ${S.records[q.id] && S.records[q.id].seen ? `<span class="${S.records[q.id].right ? 'tag good' : 'tag bad'}">${S.records[q.id].right ? '做对过' : '做错过'}</span>` : ''}</div>
-          <a class="btn sm ghost" href="#/quiz?review=${q.id}">练</a></div>
+          <a class="btn sm ghost" href="#/quiz?review=${esc(q.id)}">练</a></div>
           <div class="li-title">${esc(stripHtml(q.stem)).slice(0, 80)}</div></div>`).join('')}
       </section>
     </div>`;
@@ -974,7 +958,7 @@
   }
   function cloudReady() {
     const c = cloudCfg();
-    return !!(c.enabled && /^https?:\/\//.test(c.url || '') && (c.key || '').trim() && /^[A-Za-z0-9_-]{12,}$/.test(c.code || ''));
+    return !!(c.enabled && SECURITY.endpoint(c.url) && (c.key || '').trim() && /^[A-Za-z0-9_-]{12,}$/.test(c.code || ''));
   }
   function cloudHeaders() {
     const c = cloudCfg();
@@ -986,8 +970,7 @@
     };
   }
   function cloudPayload() {
-    const c = JSON.parse(JSON.stringify(S));
-    c.settings.ai.key = '';
+    const c = SECURITY.learningPayload(S);
     delete c.aiChat;
     delete c.lastResult;
     delete c.cloud;
@@ -999,9 +982,10 @@
     const c = cloudCfg();
     if (!cloudReady()) throw new Error('云同步还没配置完整');
     if (CLOUD_BUSY) throw new Error('正在同步，稍后再试');
+    clearTimeout(CLOUD_TIMER);
     CLOUD_BUSY = true; CLOUD_SUPPRESS = true;
     try {
-      const url = c.url.replace(/\/+$/, '') + '/rest/v1/sas_state?on_conflict=code';
+      const url = SECURITY.endpoint(c.url) + '/rest/v1/sas_state?on_conflict=code';
       const r = await fetch(url, {
         method: 'POST',
         headers: Object.assign(cloudHeaders(), { Prefer: 'resolution=merge-duplicates,return=minimal' }),
@@ -1018,9 +1002,11 @@
   async function cloudPull(apply) {
     const c = cloudCfg();
     if (!cloudReady()) throw new Error('云同步还没配置完整');
+    clearTimeout(CLOUD_TIMER);
+    if (CLOUD_BUSY) throw new Error('正在同步，稍后再试');
     CLOUD_BUSY = true; CLOUD_SUPPRESS = true;
     try {
-      const url = c.url.replace(/\/+$/, '') + '/rest/v1/sas_state?code=eq.' + encodeURIComponent(c.code) + '&select=payload,updated_at';
+      const url = SECURITY.endpoint(c.url) + '/rest/v1/sas_state?code=eq.' + encodeURIComponent(c.code) + '&select=payload,updated_at';
       const r = await fetch(url, { headers: cloudHeaders() });
       if (!r.ok) throw new Error('读取失败：' + (await r.text()).slice(0, 160));
       const rows = await r.json();
@@ -1028,26 +1014,20 @@
       const row = rows[0];
       c.remoteAt = new Date(row.updated_at).getTime();
       if (!apply) { save(); return row; }
-      const key = S.settings.ai.key;
-      const cloudCfgSaved = JSON.parse(JSON.stringify(c));
-      const incoming = row.payload || {};
-      S = Object.assign(defaults(), incoming);
-      S.settings = Object.assign(defaults().settings, incoming.settings || {});
-      S.settings.ai = Object.assign(defaults().settings.ai, (incoming.settings || {}).ai || {});
-      S.settings.ai.key = key;
-      S.cloud = Object.assign(cloudCfgSaved, { lastSync: Date.now(), remoteAt: c.remoteAt });
-      S.importedMeta = incoming.importedMeta || { points: [], materials: [] };
-      save(); applyTheme();
+      restoreLearningState(row.payload);
+      S.cloud.lastSync = Date.now();
+      S.cloud.remoteAt = c.remoteAt;
+      save(false);
       return row;
     } finally { CLOUD_BUSY = false; CLOUD_SUPPRESS = false; }
   }
 
   function cloudSchedule() {
+    clearTimeout(CLOUD_TIMER);
     const c = cloudCfg();
     if (!cloudReady() || !c.auto) return;
-    clearTimeout(CLOUD_TIMER);
     CLOUD_TIMER = setTimeout(() => {
-      cloudPush().then(() => toast('已同步到云端')).catch((e) => { c.lastError = e.message; save(); });
+      cloudPush().then(() => toast('已同步到云端')).catch((e) => { c.lastError = e.message; save(false); });
     }, 9000);
   }
 
@@ -1069,7 +1049,7 @@
 
   async function ensureWB() {
     const ai = S.settings.ai;
-    if (!ai.cloudEndpoint) throw new Error('还没填云服务 endpoint（形如 https://xxx.workbuddy.link）');
+    if (!SECURITY.endpoint(ai.cloudEndpoint)) throw new Error('还没填云服务 endpoint（形如 https://xxx.workbuddy.link）');
     if (!/^wbpk_/.test(ai.publishableKey || '')) throw new Error('publishableKey 应以 wbpk_ 开头，请从云服务面板复制完整值');
     const sig = ai.cloudEndpoint + '|' + ai.publishableKey;
     if (WB_CLOUD && WB_SIG === sig) return WB_CLOUD;
@@ -1094,8 +1074,10 @@
   }
 
   async function fetchWBModels() {
+    const stateAtStart = S;
     const cloud = await ensureWB();
     const models = await cloud.llm.models.list();
+    if (S !== stateAtStart) throw new Error('学习数据已恢复，请重新拉取模型列表');
     S.settings.ai.cloudModels = (models || []).map((m) => ({ id: m.id, name: m.name || m.id, disabled: m.disabled === true || m.enabled === false }));
     if (!S.settings.ai.cloudModel || !S.settings.ai.cloudModels.some((m) => m.id === S.settings.ai.cloudModel && !m.disabled)) {
       const first = S.settings.ai.cloudModels.find((m) => !m.disabled);
@@ -1142,9 +1124,9 @@
     if (!content) content = '（模型没有返回正文，可能被内容策略拦截了）';
     const u = usage || {};
     S.aiUsage.calls += 1;
-    S.aiUsage.tin += u.prompt_tokens || 0;
-    S.aiUsage.tout += u.completion_tokens || 0;
-    S.aiUsage.credits = (S.aiUsage.credits || 0) + (Number(u.credit) || 0);
+    S.aiUsage.tin += SECURITY.safeNumber(u.prompt_tokens);
+    S.aiUsage.tout += SECURITY.safeNumber(u.completion_tokens);
+    S.aiUsage.credits = (S.aiUsage.credits || 0) + SECURITY.safeNumber(u.credit);
     S.aiChat.push({ role: 'assistant', content, at: now() });
     save();
   }
@@ -1155,7 +1137,8 @@
     if (!ai.model) throw new Error('还没填模型名称');
     const payload = { model: ai.model, messages, temperature: Number(ai.temperature) || 0.4, max_tokens: Number(ai.maxTokens) || 900 };
     const key = (ai.key || '').trim();
-    const base = (ai.base || '').replace(/\/+$/, '');
+    const base = SECURITY.endpoint(ai.base);
+    if (!base) throw new Error('接口地址必须是 HTTPS（本机 localhost 可用 HTTP），且不能含账号、参数或片段');
 
     if (ai.proxy !== 'direct' && location.protocol.startsWith('http')) {
       try {
@@ -1226,7 +1209,7 @@
       : !!(ai.key || '').trim();
     return `<div class="fade-in">
       <div class="page-head"><div><div class="kicker">可以追问，但别全信</div><h1 class="page-title">AI 教师</h1>
-      <div class="page-sub">${ctxQ ? '正在讲：' + esc(pointName(ctxQ.point)) + ' · ' + ctxQ.id.toUpperCase() : '选择一个题目进入，或直接提问'} ${ctxQ ? `<a class="link small" href="#/quiz?review=${ctxQ.id}">回到题目</a>` : ''}</div></div>
+      <div class="page-sub">${ctxQ ? '正在讲：' + esc(pointName(ctxQ.point)) + ' · ' + esc(ctxQ.id.toUpperCase()) : '选择一个题目进入，或直接提问'} ${ctxQ ? `<a class="link small" href="#/quiz?review=${esc(ctxQ.id)}">回到题目</a>` : ''}</div></div>
       <div class="row"><button class="btn sm ghost" data-action="ai-clear">清空对话</button><a class="btn sm ghost" href="#/settings">模型设置</a></div></div>
 
       ${!hasKey ? `<div class="card card-pad" style="margin-bottom:14px;border-color:var(--warn)">
@@ -1303,9 +1286,9 @@
       S.aiChat.push({ role: 'assistant', content, at: now() });
       const u = data.usage || {};
       S.aiUsage.calls += 1;
-      S.aiUsage.tin += u.prompt_tokens || 0;
-      S.aiUsage.tout += u.completion_tokens || 0;
-      const cost = ((u.prompt_tokens || 0) / 1e6) * (Number(ai.priceIn) || 0) + ((u.completion_tokens || 0) / 1e6) * (Number(ai.priceOut) || 0);
+      S.aiUsage.tin += SECURITY.safeNumber(u.prompt_tokens);
+      S.aiUsage.tout += SECURITY.safeNumber(u.completion_tokens);
+      const cost = ((SECURITY.safeNumber(u.prompt_tokens)) / 1e6) * (Number(ai.priceIn) || 0) + ((SECURITY.safeNumber(u.completion_tokens)) / 1e6) * (Number(ai.priceOut) || 0);
       S.aiUsage.cost = Math.round((S.aiUsage.cost + cost) * 1e6) / 1e6;
       save();
     } catch (e) {
@@ -1389,7 +1372,7 @@
         <div class="field"><label>模型名称</label><input class="input" value="${esc(ai.model)}" data-set="ai.model" placeholder="deepseek-chat"></div>
       </div>
       <div class="field"><label>API 密钥</label>
-        <input class="input" type="password" value="${ai.remember ? esc(ai.key) : ''}" data-set="ai.key" placeholder="sk-…（只存本机）" autocomplete="off">
+        <input class="input" type="password" value="${esc(ai.key)}" data-set="ai.key" placeholder="sk-…（只存本机）" autocomplete="off">
         <div class="hint">不要发到聊天窗口，也不要写进代码。公共电脑上建议关闭“记住密钥”。</div>
       </div>
       <label class="row small" style="gap:8px;margin-bottom:12px"><input type="checkbox" ${ai.remember ? 'checked' : ''} data-set="ai.remember"> 记住密钥（关闭后刷新页面即清除）</label>
@@ -1446,7 +1429,7 @@
           <button class="btn" data-action="import-bank">导入题库</button>
           <button class="btn ghost" data-action="export-bank-tpl">下载题库模板</button>
         </div>
-        <div class="hint">备份含学习记录、设置、收藏与错题（不含密钥）。已导入的题目 ${imported} 道；待审核 ${S.pending.length} 条。</div>
+        <div class="hint">备份含学习记录、学习设置、收藏与错题；不含 AI 或同步连接配置，恢复时保留本机连接且不会自动上传。已导入的题目 ${imported} 道；待审核 ${S.pending.length} 条。</div>
         <div class="row" style="margin-top:12px">
           <button class="btn sm ghost" data-action="clear-records">清空学习记录</button>
           <button class="btn sm ghost" data-action="reset-all">恢复出厂设置</button>
@@ -1519,11 +1502,20 @@
   }
 
   function exportBackup() {
-    const copy = JSON.parse(JSON.stringify(S));
-    copy.settings.ai.key = '';
+    const copy = SECURITY.learningPayload(S);
     const data = { type: 'sas-backup', version: 1, exportedAt: new Date().toISOString(), bankVersion: BANK.version, state: copy };
     download('上岸练习室-备份-' + todayKey() + '.json', JSON.stringify(data, null, 2));
-    toast('备份已导出（不含密钥）');
+    toast('备份已导出（不含 AI 与同步连接配置）');
+  }
+
+  function restoreLearningState(incoming) {
+    if (AI_BUSY) throw new Error('AI 请求进行中，请结束后再恢复');
+    const restored = SECURITY.restoreState(incoming, S, defaults(), BUILTIN_BANK);
+    clearTimeout(CLOUD_TIMER); CLOUD_TIMER = null;
+    S = restored;
+    CURRENT = null; saveCurrent();
+    mergeImported();
+    save(false); applyTheme();
   }
 
   function importBackup() {
@@ -1531,20 +1523,17 @@
     inp.type = 'file'; inp.accept = '.json,application/json';
     inp.onchange = () => {
       const f = inp.files[0]; if (!f) return;
+      if (f.size > 10 * 1024 * 1024) return toast('文件过大，请使用不超过 10 MB 的 JSON');
       const fr = new FileReader();
       fr.onload = () => {
         try {
           const d = JSON.parse(fr.result);
           const st = d.state || d;
           if (!st.records || !st.settings) throw new Error('不是有效的备份文件');
-          if (!confirm('导入会覆盖当前学习记录，确定继续？')) return;
-          const key = S.settings.ai.key;
-          S = Object.assign(defaults(), st);
-          S.settings = Object.assign(defaults().settings, st.settings || {});
-          S.settings.ai = Object.assign(defaults().settings.ai, (st.settings || {}).ai || {});
-          S.settings.ai.key = key;
-          S.imported = st.imported || S.imported;
-          save(); applyTheme(); go('#/home'); toast('备份已恢复');
+          if (!confirm('导入会覆盖当前学习记录；保留本机 AI 和同步配置，不会自动上传。确定继续？')) return;
+          if (CLOUD_BUSY) throw new Error('正在同步，请完成后再导入');
+          restoreLearningState(st);
+          go('#/home'); render(); toast('备份已恢复；本机连接未更改，未自动上传');
         } catch (e) { toast('导入失败：' + e.message); }
       };
       fr.readAsText(f);
@@ -1557,44 +1546,24 @@
     inp.type = 'file'; inp.accept = '.json,application/json';
     inp.onchange = () => {
       const f = inp.files[0]; if (!f) return;
+      if (f.size > 10 * 1024 * 1024) return toast('文件过大，请使用不超过 10 MB 的 JSON');
       const fr = new FileReader();
       fr.onload = () => {
         try {
           const d = JSON.parse(fr.result);
           const list = Array.isArray(d) ? d : (d.questions || []);
           if (!Array.isArray(list) || !list.length) throw new Error('没有找到 questions 数组');
-          const newPoints = (d.points || []).filter((p) => p && p.id && !POINT[p.id]);
-          const newMats = (d.materials || []).filter((m) => m && m.id && !MATERIAL[m.id]);
-          const bad = [];
-          const ok = [];
-          list.forEach((q, i) => {
-            if (!q.id || !Array.isArray(q.options) || q.options.length < 2 || typeof q.answer !== 'number' || q.answer < 0 || q.answer >= q.options.length || !q.stem) {
-              bad.push(i + 1); return;
-            }
-            if (QMAP[q.id]) { bad.push(i + 1 + '(重复ID)'); return; }
-            ok.push(q);
-          });
-          if (!ok.length) throw new Error('没有通过校验的题目（需要 id / stem / options / answer）');
-          S.imported = (S.imported || []).concat(ok);
-          if (newPoints.length) {
-            S.importedMeta = S.importedMeta || { points: [], materials: [] };
-            S.importedMeta.points = (S.importedMeta.points || []).concat(newPoints);
-            newPoints.forEach((p) => { BANK.points.push(p); POINT[p.id] = p; });
-          }
-          if (newMats.length) {
-            S.importedMeta = S.importedMeta || { points: [], materials: [] };
-            S.importedMeta.materials = (S.importedMeta.materials || []).concat(newMats);
-            newMats.forEach((m) => { BANK.materials.push(m); MATERIAL[m.id] = m; });
-          }
+          const checked = SECURITY.normalizeImport(d, BANK);
+          const ok = checked.questions;
+          const newPoints = checked.points;
+          const newMats = checked.materials;
+          if (!ok.length) throw new Error('没有通过安全校验的题目，请检查 ID、模块、知识点、选项与整数答案');
+          S.imported = S.imported.concat(ok);
+          S.importedMeta.points = S.importedMeta.points.concat(newPoints);
+          S.importedMeta.materials = S.importedMeta.materials.concat(newMats);
+          mergeImported();
           save();
-          // 合并到内存题库
-          ok.forEach((q) => {
-            const qq = Object.assign({ module: 'ziliao', point: 'zl-zonghe', difficulty: 2, explain: '', optionNotes: [], method: '', traps: [], materialId: null, calc: null, tags: [] }, q);
-            qq.review = qq.review || { status: 'pending', note: '用户导入，未审核' };
-            qq.source = qq.source || '用户导入';
-            BANK.questions.push(qq); QMAP[qq.id] = qq;
-          });
-          toast(`导入 ${ok.length} 题${newPoints.length ? '、' + newPoints.length + ' 个知识点' : ''}${newMats.length ? '、' + newMats.length + ' 份材料' : ''}${bad.length ? '，跳过 ' + bad.length + ' 题' : ''}`);
+          toast(`导入 ${ok.length} 题${newPoints.length ? '、' + newPoints.length + ' 个知识点' : ''}${newMats.length ? '、' + newMats.length + ' 份材料' : ''}${checked.rejected ? '，跳过 ' + checked.rejected + ' 题' : ''}`);
           render();
         } catch (e) { toast('导入失败：' + e.message); }
       };
@@ -1608,7 +1577,7 @@
       version: '1.0', notice: '把 questions 数组填好后，在设置里导入。answer 是选项下标（0=A）。',
       questions: [{
         id: 'my-001', module: 'ziliao', point: 'zl-bz', difficulty: 2,
-        stem: '题干文字，可含 <b>HTML</b>', options: ['选项A', '选项B', '选项C', '选项D'], answer: 1,
+        stem: '题干文字，可含 <b>基础排版</b> 和安全的静态 SVG；脚本、外链与交互属性会被移除', options: ['选项A', '选项B', '选项C', '选项D'], answer: 1,
         explain: '解析文字', optionNotes: ['A错在哪', 'B对在哪', 'C错在哪', 'D错在哪'],
         method: '方法一句话', traps: ['易错点'], materialId: null,
         review: { status: 'pending', note: '自建题，待审核' }, source: '自编'
@@ -1816,12 +1785,12 @@
       case 'cloud-push': {
         (async () => {
           try { await cloudPush(); render(); toast('已上传到云端'); }
-          catch (e) { toast(e.message.slice(0, 60)); const c = cloudCfg(); c.lastError = e.message; save(); }
+          catch (e) { toast(e.message.slice(0, 60)); const c = cloudCfg(); c.lastError = e.message; save(false); }
         })();
         break;
       }
       case 'cloud-pull': {
-        openModal('从云端恢复', '<p>会用云端记录覆盖这台设备上的学习记录，确定？</p>',
+        openModal('从云端恢复', '<p>会用云端记录覆盖这台设备上的学习记录；保留本机 AI 和同步配置，不会自动上传。确定？</p>',
           '<button class="btn ghost" data-action="close-modal">取消</button><button class="btn primary" data-action="cloud-pull-2">确定恢复</button>');
         break;
       }
@@ -1913,7 +1882,7 @@
     else if (path === 'instant') S.settings.instant = !!v;
     else if (path.startsWith('ai.')) {
       const k = path.slice(3);
-      if (k === 'remember' && !v) { S.settings.ai.remember = false; S.settings.ai.key = ''; }
+      if (k === 'remember') { S.settings.ai.remember = !!v; }
       else S.settings.ai[k] = v;
       if (k === 'cloudEndpoint' || k === 'publishableKey') { WB_CLOUD = null; WB_SIG = ''; }
       if (k === 'provider') render();
@@ -1988,3 +1957,4 @@
     // 预留离线缓存位；当前不注册，避免缓存旧题库
   }
 })();
+

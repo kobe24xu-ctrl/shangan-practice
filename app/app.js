@@ -47,6 +47,9 @@
   const POINT = Object.fromEntries(BANK.points.map((p) => [p.id, p]));
   const MATERIAL = Object.fromEntries((BANK.materials || []).map((m) => [m.id, m]));
   const QMAP = Object.fromEntries(BANK.questions.map((q) => [q.id, q]));
+  const LEC = window.LECTURES || { teacher: { name: '林岸', title: '行测主讲', avatar: 'assets/teacher.jpg', tagline: '', bio: '' }, lectures: [] };
+  const LMAP = Object.fromEntries((LEC.lectures || []).map((l) => [l.pointId, l]));
+  const TEACHER = LEC.teacher;
   const REASONS = ['概念不清', '计算失误', '审题偏差', '时间不够', '完全没思路'];
 
   /* ---------------- 状态 ---------------- */
@@ -90,6 +93,8 @@
       importedMeta: { points: [], materials: [] },
       cloud: { enabled: false, url: '', key: '', code: '', auto: true, lastSync: 0, remoteAt: 0, lastError: '' },
       pending: [],
+      lectures: {},
+      lectureRate: 1,
       lastPractice: null
     };
   }
@@ -112,6 +117,7 @@
       out.imported = s.imported || [];
       out.importedMeta = Object.assign({ points: [], materials: [] }, s.importedMeta || {});
       out.pending = s.pending || [];
+      out.lectures = s.lectures || {};
       return out;
     } catch (e) { return base; }
   }
@@ -213,6 +219,7 @@
   const NAV = [
     { go: '#/home', label: '今日', ic: '◉' },
     { go: '#/practice', label: '练习', ic: '✎' },
+    { go: '#/lectures', label: '讲师精讲', ic: '▷' },
     { go: '#/exam', label: '模考', ic: '◷' },
     { go: '#/wrong', label: '错题本', ic: '✕' },
     { go: '#/fav', label: '收藏', ic: '★' },
@@ -224,6 +231,7 @@
   const BNAV = [
     { go: '#/home', label: '今日', ic: '◉' },
     { go: '#/practice', label: '练习', ic: '✎' },
+    { go: '#/lectures', label: '精讲', ic: '▷' },
     { go: '#/exam', label: '模考', ic: '◷' },
     { go: '#/wrong', label: '错题', ic: '✕' },
     { go: '#/settings', label: '我的', ic: '☰' }
@@ -231,13 +239,15 @@
 
   function renderNav() {
     const cur = location.hash || '#/home';
-    $('#nav').innerHTML = NAV.map((n) =>
-      `<a class="nav-item ${cur.startsWith(n.go) ? 'active' : ''}" href="${n.go}"><span class="ic">${n.ic}</span>${n.label}</a>`
-    ).join('') + '<div class="nav-sep"></div>' +
+    $('#nav').innerHTML = NAV.map((n) => {
+      const on = n.go === '#/lectures' ? cur.startsWith('#/lecture') : cur.startsWith(n.go);
+      return `<a class="nav-item ${on ? 'active' : ''}" href="${n.go}"><span class="ic">${n.ic}</span>${n.label}</a>`;
+    }).join('') + '<div class="nav-sep"></div>' +
       `<a class="nav-item ${cur.startsWith('#/about') ? 'active' : ''}" href="#/about"><span class="ic">◈</span>关于与授权</a>`;
-    $('#bottomnav').innerHTML = BNAV.map((n) =>
-      `<a class="bn-item ${cur.startsWith(n.go) ? 'active' : ''}" href="${n.go}"><span class="ic">${n.ic}</span>${n.label}</a>`
-    ).join('');
+    $('#bottomnav').innerHTML = BNAV.map((n) => {
+      const on = n.go === '#/lectures' ? cur.startsWith('#/lecture') : cur.startsWith(n.go);
+      return `<a class="bn-item ${on ? 'active' : ''}" href="${n.go}"><span class="ic">${n.ic}</span>${n.label}</a>`;
+    }).join('');
     $('#sideStreak').textContent = streakDays();
     $('#sideBank').textContent = `${BANK.questions.length} 题 · v${BANK.version}`;
   }
@@ -341,6 +351,19 @@
           <div class="small muted">连续 ${streakDays()} 天</div>
         </div>
       </section>
+
+      <a class="card lec-banner" href="#/lectures">
+        <img class="lec-banner-av" src="${esc(TEACHER.avatar)}" alt="${esc(TEACHER.name)}">
+        <div class="lec-banner-main">
+          <div class="kicker">虚拟讲师 · ${esc(TEACHER.name)}</div>
+          <h3>29 个知识点，每个 6—10 分钟讲透</h3>
+          <p>先听一遍“为什么、怎么做、哪里错”，再去做题。讲稿可朗读，例题有步骤。</p>
+        </div>
+        <div class="lec-banner-side">
+          <b>${LEC.lectures.length}</b><span>节精讲</span>
+          <span class="btn sm primary">去听讲 →</span>
+        </div>
+      </a>
 
       <div class="grid g3" style="margin-bottom:18px">${modCards}</div>
 
@@ -865,7 +888,7 @@
             const acc = rs.length ? pct(sum(rs, (r) => r.right), sum(rs, (r) => r.seen)) : null;
             return `<a class="card point-card" href="#/point/${p.id}">
               <div class="pc-top"><h4>${esc(p.name)}</h4><div class="row"><span class="tiny muted mono">${acc === null ? '未练' : acc + '%'}</span><span class="mastery"><i style="width:${acc === null ? 0 : acc}%"></i></span></div></div>
-              <div class="pc-meta">${esc(p.summary).slice(0, 52)}… · ${qs.length} 题</div></a>`;
+              <div class="pc-meta">${esc(p.summary).slice(0, 52)}… · ${qs.length} 题${LMAP[p.id] ? ' · <span class="tag">有精讲</span>' : ''}</div></a>`;
           }).join('')}</div>
         </section>`;
       }).join('')}
@@ -882,7 +905,13 @@
       ${breadcrumb('知识图谱', '#/graph')}
       <div class="page-head"><div><div class="kicker">${esc(moduleName(p.module))}</div><h1 class="page-title">${esc(p.name)}</h1>
       <div class="page-sub">${qs.length} 道题${acc === null ? '' : ' · 你的正确率 ' + acc + '%'}</div></div>
-      <button class="btn primary" data-action="practice-point" data-val="${p.id}">练这个知识点</button></div>
+      <div class="row">${LMAP[p.id] ? `<a class="btn ghost" href="#/lecture/${p.id}">听林岸讲</a>` : ''}<button class="btn primary" data-action="practice-point" data-val="${p.id}">练这个知识点</button></div></div>
+
+      ${LMAP[p.id] ? `<a class="card lec-point-cta" href="#/lecture/${p.id}">
+        <img src="${esc(TEACHER.avatar)}" alt="${esc(TEACHER.name)}">
+        <div><div class="kicker">${esc(TEACHER.name)} · ${LMAP[p.id].minutes} 分钟</div>
+        <b>先听一遍这个考点</b><span>${esc(LMAP[p.id].sections[0].body).slice(0, 54)}…</span></div>
+        <span class="btn sm primary">去听讲</span></a>` : ''}
 
       <section class="card card-pad" style="margin-bottom:14px">
         <h3 class="card-title">一句话概括</h3>
@@ -909,6 +938,230 @@
           <a class="btn sm ghost" href="#/quiz?review=${q.id}">练</a></div>
           <div class="li-title">${esc(stripHtml(q.stem)).slice(0, 80)}</div></div>`).join('')}
       </section>
+    </div>`;
+  }
+
+  /* ---------------- 虚拟讲师 ---------------- */
+  let LEC_SPEAK = { pid: null, idx: -1 };
+  let LEC_VOICE = null;
+
+  function lecRec(pid) {
+    if (!S.lectures) S.lectures = {};
+    return S.lectures[pid] || { done: [], at: 0 };
+  }
+
+  function lecDoneCount(pid) {
+    const r = lecRec(pid);
+    return Math.min(5, (r.done || []).length);
+  }
+
+  function lecSectionText(sec) {
+    const parts = [sec.heading];
+    if (sec.body) parts.push(sec.body);
+    if (sec.bullets && sec.bullets.length) parts.push(sec.bullets.join('；'));
+    if (sec.example) {
+      parts.push('例题：' + sec.example.q);
+      parts.push('解题步骤：' + sec.example.steps.join('；'));
+      parts.push('答案是：' + sec.example.answer);
+    }
+    return parts.join('。\n');
+  }
+
+  function pickZhVoice() {
+    if (!('speechSynthesis' in window)) return null;
+    if (LEC_VOICE) return LEC_VOICE;
+    const vs = speechSynthesis.getVoices() || [];
+    LEC_VOICE = vs.find((v) => /^zh/i.test(v.lang)) || vs.find((v) => /Chinese|中文|普通话/i.test(v.name)) || null;
+    return LEC_VOICE;
+  }
+
+  function stopLectureSpeech() {
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    LEC_SPEAK = { pid: null, idx: -1 };
+    $$('.lec-sec.speaking').forEach((el) => el.classList.remove('speaking'));
+    $$('[data-action="lec-read"]').forEach((b) => { b.textContent = b.getAttribute('data-orig') || '朗读本节'; });
+  }
+
+  function markLectureDone(pid, idx) {
+    const rec = lecRec(pid);
+    if (!rec.done.includes(idx)) rec.done.push(idx);
+    rec.at = now();
+    S.lectures[pid] = rec;
+    save();
+    const sec = document.getElementById('lec-sec-' + idx);
+    if (sec) {
+      sec.classList.add('done');
+      const b = sec.querySelector('[data-action="lec-done"]');
+      if (b) b.textContent = '✓ 已学';
+    }
+    const t = document.getElementById('lecProgText');
+    if (t) t.textContent = `已学 ${lecDoneCount(pid)} / 5 节`;
+    const barEl = document.getElementById('lecProgBar');
+    if (barEl) barEl.style.width = (lecDoneCount(pid) / 5 * 100) + '%';
+  }
+
+  function speakLecture(pid, idx) {
+    if (!('speechSynthesis' in window)) { toast('当前浏览器不支持语音朗读，可以看文字稿'); return; }
+    const lec = LMAP[pid];
+    if (!lec) return;
+    stopLectureSpeech();
+    const sec = lec.sections[idx];
+    const u = new SpeechSynthesisUtterance(lecSectionText(sec));
+    u.lang = 'zh-CN';
+    u.rate = clamp(Number(S.lectureRate) || 1, 0.6, 1.6);
+    u.pitch = 1;
+    const v = pickZhVoice();
+    if (v) u.voice = v;
+    const el = document.getElementById('lec-sec-' + idx);
+    if (el) el.classList.add('speaking');
+    const btn = el && el.querySelector('[data-action="lec-read"]');
+    if (btn) { if (!btn.getAttribute('data-orig')) btn.setAttribute('data-orig', '朗读本节'); btn.textContent = '朗读中…'; }
+    LEC_SPEAK = { pid, idx };
+    u.onend = () => {
+      LEC_SPEAK = { pid: null, idx: -1 };
+      if (el) el.classList.remove('speaking');
+      if (btn) btn.textContent = '再读一遍';
+      markLectureDone(pid, idx);
+    };
+    u.onerror = (e) => {
+      LEC_SPEAK = { pid: null, idx: -1 };
+      if (el) el.classList.remove('speaking');
+      if (btn) btn.textContent = '朗读本节';
+      if (e && e.error !== 'canceled') toast('朗读失败：' + (e.error || '系统语音不可用'));
+    };
+    speechSynthesis.speak(u);
+  }
+
+  function viewLectures() {
+    const total = LEC.lectures.length;
+    const doneLec = LEC.lectures.filter((l) => lecDoneCount(l.pointId) >= 5).length;
+    const started = LEC.lectures.filter((l) => lecDoneCount(l.pointId) > 0).length;
+    const next = LEC.lectures.find((l) => lecDoneCount(l.pointId) < 5) || LEC.lectures[0];
+    const groups = MODULES.map((m) => {
+      const ls = LEC.lectures.filter((l) => l.module === m.id);
+      if (!ls.length) return '';
+      return `<section class="card lec-group">
+        <div class="lec-group-head"><h3>${esc(m.name)}</h3><span class="tiny muted">${ls.length} 讲</span></div>
+        ${ls.map((l) => {
+          const d = lecDoneCount(l.pointId);
+          return `<a class="lec-row" href="#/lecture/${l.pointId}">
+            <div class="lec-row-ic" style="background:${m.color}1a;color:${m.color}">▷</div>
+            <div class="lec-row-main">
+              <div class="lec-row-title">${esc(l.pointName)}</div>
+              <div class="lec-row-meta">${esc(m.short)} · ${l.minutes} 分钟 · ${l.sections.length} 节${d ? ' · 已学 ' + d + '/5' : ''}</div>
+            </div>
+            <span class="tag ${d >= 5 ? 'good' : ''}">${d >= 5 ? '已学完' : d ? '继续' : '去听'}</span>
+          </a>`;
+        }).join('')}
+      </section>`;
+    }).join('');
+
+    return `<div class="fade-in">
+      <div class="page-head"><div><div class="kicker">虚拟讲师</div><h1 class="page-title">讲师精讲</h1>
+      <div class="page-sub">${total} 个知识点 · ${sum(LEC.lectures, (l) => l.sections.length)} 个小节 · 可朗读、可练、可追问</div></div></div>
+
+      <section class="card lec-hero">
+        <img class="lec-hero-av" src="${esc(TEACHER.avatar)}" alt="${esc(TEACHER.name)}">
+        <div class="lec-hero-main">
+          <div class="kicker">${esc(TEACHER.title)}</div>
+          <h2>${esc(TEACHER.name)}</h2>
+          <p class="lec-tagline">${esc(TEACHER.tagline)}</p>
+          <p class="lec-bio">${esc(TEACHER.bio)}</p>
+          <div class="lec-hero-stats">
+            <span><b>${total}</b> 讲</span><span><b>${doneLec}</b> 已学完</span><span><b>${started}</b> 已开始</span>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <a class="btn primary" href="#/lecture/${next.pointId}">${started ? '接着上次听' : '从第一节开始'}</a>
+            <a class="btn ghost" href="#/graph">按知识图谱找</a>
+          </div>
+        </div>
+      </section>
+
+      <div class="lec-list">${groups}</div>
+    </div>`;
+  }
+
+  function viewLecture(pid) {
+    const l = LMAP[pid];
+    if (!l) return `<div class="card card-pad">还没有这一讲的讲稿。</div>`;
+    const p = POINT[pid] || { name: l.pointName, module: l.module };
+    const m = MOD[p.module] || { name: '', color: '#C0503A' };
+    const done = lecDoneCount(pid);
+    const voice = pickZhVoice();
+    const voiceHint = !('speechSynthesis' in window)
+      ? '当前浏览器不支持朗读，可看文字稿'
+      : (voice ? '朗读使用系统中文语音' : '系统未检测到中文语音，朗读效果可能不准');
+
+    const secs = l.sections.map((sec, i) => {
+      let inner = '';
+      if (sec.body) inner += `<div class="lec-body">${esc(sec.body)}</div>`;
+      if (sec.bullets && sec.bullets.length) inner += `<ul class="lec-points">${sec.bullets.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>`;
+      if (sec.example) {
+        inner += `<div class="lec-example">
+          <div class="lec-example-q"><b>例题</b>${esc(sec.example.q)}</div>
+          <ol class="lec-steps">${sec.example.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>
+          <div class="lec-answer"><span>答案</span>${esc(sec.example.answer)}</div>
+        </div>`;
+      }
+      return `<section class="lec-sec ${lecRec(pid).done.includes(i) ? 'done' : ''}" id="lec-sec-${i}" data-idx="${i}">
+        <div class="lec-sec-head">
+          <span class="lec-num">${String(i + 1).padStart(2, '0')}</span>
+          <h3>${esc(sec.heading)}</h3>
+          <div class="lec-sec-actions">
+            <button class="btn sm ghost" data-action="lec-read" data-val="${i}" data-pid="${pid}">朗读本节</button>
+          </div>
+        </div>
+        ${inner}
+        <div class="lec-sec-foot">
+          <button class="btn sm ghost" data-action="lec-done" data-val="${i}" data-pid="${pid}">${lecRec(pid).done.includes(i) ? '✓ 已学' : '标记已学'}</button>
+        </div>
+      </section>`;
+    }).join('');
+
+    return `<div class="fade-in">
+      ${breadcrumb('讲师精讲', '#/lectures')}
+      <div class="lec-layout">
+        <aside class="card lec-side">
+          <img class="lec-side-av" src="${esc(TEACHER.avatar)}" alt="${esc(TEACHER.name)}">
+          <div class="lec-side-name">${esc(TEACHER.name)}</div>
+          <div class="tiny muted">${esc(TEACHER.title)}</div>
+          <div class="lec-side-prog">
+            <div class="spread small"><span>本讲进度</span><b id="lecProgText">已学 ${done} / 5 节</b></div>
+            <div class="bar" style="margin-top:6px"><i id="lecProgBar" style="width:${done / 5 * 100}%"></i></div>
+          </div>
+          <div class="lec-side-ctrl">
+            <label class="tiny muted">语速</label>
+            <select class="input sm" data-set="lectureRate">
+              ${[0.8, 1, 1.2, 1.4].map((r) => `<option value="${r}" ${Number(S.lectureRate) === r ? 'selected' : ''}>${r}x</option>`).join('')}
+            </select>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button class="btn sm primary" data-action="lec-read" data-val="0" data-pid="${pid}">朗读第一节</button>
+            <button class="btn sm ghost" data-action="lec-stop">停止</button>
+          </div>
+          <div class="hint" style="margin-top:10px">${voiceHint}。朗读只在你的设备上运行，不消耗 AI 额度。</div>
+          <div class="lec-side-note">虚拟讲师，形象由 AI 生成，声音由系统语音合成，不是真人录制。讲稿为原创改写，例题由脚本复算。</div>
+        </aside>
+
+        <div class="lec-main">
+          <div class="lec-head">
+            <div>
+              <div class="kicker">${esc(m.name)} · ${l.minutes} 分钟</div>
+              <h1 class="page-title">${esc(l.pointName)}</h1>
+            </div>
+            <div class="row">
+              <a class="btn sm" href="#/practice?p=${pid}">练这个考点</a>
+              <a class="btn sm ghost" href="#/ai?p=${pid}">问 AI 追问</a>
+            </div>
+          </div>
+          <div class="lec-nav">${l.sections.map((sec, i) => `<a href="#/lecture/${pid}" data-action="lec-jump" data-val="${i}">${i + 1}. ${esc(sec.heading)}</a>`).join('')}</div>
+          ${secs}
+          <div class="lec-end card">
+            <div><b>这一讲听完了？</b><span class="small muted"> 去练 10 道这个考点的题，比再听一遍更有效。</span></div>
+            <div class="row"><a class="btn primary" href="#/practice?p=${pid}">去练这个考点</a><a class="btn ghost" href="#/lectures">返回列表</a></div>
+          </div>
+        </div>
+      </div>
     </div>`;
   }
 
@@ -1189,13 +1442,20 @@
     return data;
   }
 
-  function aiPrompt(q) {
+  function aiPrompt(q, point) {
     let sys = '你是“上岸练习室”的 AI 教师，服务对象是备考国考/省考的成年学习者。要求：\n' +
       '1. 用简体中文，先给结论再给理由，条理清晰，可以用少量 Markdown 强调。\n' +
       '2. 涉及计算必须写出算式与量级判断，不要只给答案。\n' +
       '3. 不确定、题目信息不足、或存在争议时，必须明确说“不确定/这题可能有争议”，不得编造答案、出处或数据。\n' +
       '4. 不夸大押题命中率，不承诺考试结果。\n' +
       '5. 若用户问的不是行测学习内容，简短说明你只负责本App的学习答疑。\n';
+    if (point) {
+      sys += '\n【当前知识点】' + moduleName(point.module) + ' / ' + point.name +
+        '\n一句话：' + point.summary +
+        '\n常用方法：' + (point.methods || []).join('；') +
+        '\n易错点：' + (point.traps || []).join('；') +
+        '\n用户刚听完虚拟讲师林岸的精讲，可能还有没听懂的地方。请用更通俗的语言补充，必要时举生活化例子，不要重复整段讲稿。';
+    }
     if (q) {
       sys += '\n【当前题目】\n题干：' + stripHtml(q.stem) + '\n选项：' + q.options.map((o, i) => 'ABCD'[i] + '. ' + o).join('；') +
         '\n标准答案：' + 'ABCD'[q.answer] + '\n现有解析：' + q.explain + '\n考点：' + moduleName(q.module) + ' / ' + pointName(q.point) +
@@ -1218,16 +1478,18 @@
     const ai = S.settings.ai;
     const ctxId = params.get('q');
     const ctxQ = ctxId ? QMAP[ctxId] : null;
+    const ctxPid = params.get('p');
+    const ctxPoint = ctxPid ? POINT[ctxPid] : null;
     const u = S.aiUsage;
     const msgs = S.aiChat || [];
-    const est = aiCostEstimate([{ role: 'system', content: aiPrompt(ctxQ) }]);
+    const est = aiCostEstimate([{ role: 'system', content: aiPrompt(ctxQ, ctxPoint) }]);
     const isWB = ai.provider === 'wb';
     const hasKey = isWB
       ? !!(ai.cloudEndpoint && ai.publishableKey && ai.cloudModel)
       : !!(ai.key || '').trim();
     return `<div class="fade-in">
       <div class="page-head"><div><div class="kicker">可以追问，但别全信</div><h1 class="page-title">AI 教师</h1>
-      <div class="page-sub">${ctxQ ? '正在讲：' + esc(pointName(ctxQ.point)) + ' · ' + ctxQ.id.toUpperCase() : '选择一个题目进入，或直接提问'} ${ctxQ ? `<a class="link small" href="#/quiz?review=${ctxQ.id}">回到题目</a>` : ''}</div></div>
+      <div class="page-sub">${ctxQ ? '正在讲：' + esc(pointName(ctxQ.point)) + ' · ' + ctxQ.id.toUpperCase() : (ctxPoint ? '正在补讲：' + esc(ctxPoint.name) + ' · 来自林岸的精讲' : '选择一个题目进入，或直接提问')} ${ctxQ ? `<a class="link small" href="#/quiz?review=${ctxQ.id}">回到题目</a>` : (ctxPoint ? `<a class="link small" href="#/lecture/${ctxPoint.id}">回到讲稿</a>` : '')}</div></div>
       <div class="row"><button class="btn sm ghost" data-action="ai-clear">清空对话</button><a class="btn sm ghost" href="#/settings">模型设置</a></div></div>
 
       ${!hasKey ? `<div class="card card-pad" style="margin-bottom:14px;border-color:var(--warn)">
@@ -1247,7 +1509,7 @@
             .map((t) => `<button class="chip" data-action="ai-sugg" data-val="${esc(t)}">${esc(t)}</button>`).join('')}
         </div>
         <div class="ai-bar">
-          <textarea class="input" id="aiInput" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <textarea class="input" id="aiInput" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）">${ctxPoint ? esc('林岸刚讲了「' + ctxPoint.name + '」，请用更通俗的方式再讲一遍，并补一个生活化的例子。') : ''}</textarea>
           <button class="btn primary" data-action="ai-send" id="aiSend">发送</button>
         </div>
         <div class="cost-note">
@@ -1271,8 +1533,10 @@
     }
     const qid = (location.hash.split('q=')[1] || '').split('&')[0];
     const ctxQ = qid && QMAP[qid] ? QMAP[qid] : null;
+    const pid = (location.hash.split('p=')[1] || '').split('&')[0];
+    const ctxPoint = pid && POINT[pid] ? POINT[pid] : null;
     const history = (S.aiChat || []).slice(-10).map((m) => ({ role: m.role, content: m.content }));
-    const messages = [{ role: 'system', content: aiPrompt(ctxQ) }].concat(history, [{ role: 'user', content: text }]);
+    const messages = [{ role: 'system', content: aiPrompt(ctxQ, ctxPoint) }].concat(history, [{ role: 'user', content: text }]);
     if (ai.provider === 'wb') {
       S.aiChat = (S.aiChat || []).concat([{ role: 'user', content: text, at: now() }]);
       save();
@@ -1628,6 +1892,9 @@
     const params = new URLSearchParams(qs || '');
     let html = '';
     document.body.classList.remove('fade-in');
+    if (!raw.startsWith('#/lecture/') && 'speechSynthesis' in window) {
+      try { speechSynthesis.cancel(); } catch (e) {}
+    }
 
     if (path === '#/home' || path === '' || path === '#/') html = viewHome();
     else if (path === '#/practice') html = viewPractice(params);
@@ -1637,6 +1904,8 @@
     else if (path === '#/wrong') html = viewWrong();
     else if (path === '#/fav') html = viewFav();
     else if (path === '#/graph') html = viewGraph();
+    else if (path === '#/lectures') html = viewLectures(params);
+    else if (path.startsWith('#/lecture/')) html = viewLecture(path.replace('#/lecture/', ''));
     else if (path.startsWith('#/point/')) html = viewPoint(path.replace('#/point/', ''));
     else if (path === '#/stats') html = viewStats();
     else if (path === '#/ai') html = viewAI(params);
@@ -1680,6 +1949,28 @@
     const val = a.getAttribute('data-val');
 
     switch (act) {
+      case 'lec-read': {
+        e.preventDefault();
+        speakLecture(a.getAttribute('data-pid'), Number(val));
+        break;
+      }
+      case 'lec-stop': {
+        e.preventDefault();
+        stopLectureSpeech();
+        toast('已停止朗读');
+        break;
+      }
+      case 'lec-done': {
+        e.preventDefault();
+        markLectureDone(a.getAttribute('data-pid'), Number(val));
+        break;
+      }
+      case 'lec-jump': {
+        e.preventDefault();
+        const target = document.getElementById('lec-sec-' + val);
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        break;
+      }
       case 'theme': {
         S.settings.theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
         save(); applyTheme(); render(); break;
@@ -1910,6 +2201,7 @@
       if (k === 'enabled') render();
       return;
     }
+    if (path === 'lectureRate') { S.lectureRate = clamp(Number(v) || 1, 0.6, 1.6); save(); return; }
     if (path === 'goal') S.settings.goal = clamp(Number(v) || 20, 5, 200);
     else if (path === 'instant') S.settings.instant = !!v;
     else if (path.startsWith('ai.')) {

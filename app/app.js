@@ -1477,7 +1477,7 @@
         <h3 class="card-title" style="margin-top:18px">记录与隐私</h3>
         <p>学习记录保存在浏览器 localStorage，不上传服务器。AI 请求会发送到你配置的模型服务商；密钥只存在本机，不写入源码、不随备份导出。</p>
         <h3 class="card-title" style="margin-top:18px">版本</h3>
-        <p>v2.0 · 行测 538 题 · 2026-11-03</p>
+        <p>v2.0 · 行测 533 题 · 2026-11-03</p>
       </section>
     </div>`;
   }

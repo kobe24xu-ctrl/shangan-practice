@@ -1,5 +1,6 @@
 import {EPISODES,categories} from './data.mjs';
-import {timecode,parseTranscript,dictationScore,escapeHTML,exportJSON,validBackup,safeYoutubeId} from './core.mjs';
+import {WARMUPS} from './warmups.mjs';
+import {timecode,parseTranscript,dictationScore,escapeHTML,exportJSON,validBackup,safeYoutubeId,scheduleReview,isReviewDue,quizletTSV,exportSRT} from './core.mjs';
 
 const $=(sel,root=document)=>root.querySelector(sel);
 const $$=(sel,root=document)=>Array.from(root.querySelectorAll(sel));
@@ -48,12 +49,13 @@ const icons={
 const svg=(name)=>`<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name]||icons.info}</svg>`;
 const replaceIcons=(root=document)=>$$('[data-icon]',root).forEach(e=>{e.innerHTML=svg(e.dataset.icon);});
 const storageKey='ceo-english-lab:v1';
-const defaultState=()=>({progress:{},saved:[],history:[],transcripts:{},customWords:[],lastEpisode:'sinek-ai'});
-const readState=()=>{try{let raw=JSON.parse(localStorage.getItem(storageKey));if(!raw||typeof raw!=='object')return defaultState();return {...defaultState(),...raw,progress:raw.progress&&typeof raw.progress==='object'?raw.progress:{},saved:Array.isArray(raw.saved)?raw.saved:[],history:Array.isArray(raw.history)?raw.history:[],transcripts:raw.transcripts&&typeof raw.transcripts==='object'?raw.transcripts:{},customWords:Array.isArray(raw.customWords)?raw.customWords:[]};}catch{return defaultState();}};
+const defaultState=()=>({progress:{},saved:[],history:[],transcripts:{},customWords:[],reviews:{},lastEpisode:'sinek-ai'});
+const readState=()=>{try{let raw=JSON.parse(localStorage.getItem(storageKey));if(!raw||typeof raw!=='object')return defaultState();return {...defaultState(),...raw,progress:raw.progress&&typeof raw.progress==='object'?raw.progress:{},saved:Array.isArray(raw.saved)?raw.saved:[],history:Array.isArray(raw.history)?raw.history:[],transcripts:raw.transcripts&&typeof raw.transcripts==='object'?raw.transcripts:{},customWords:Array.isArray(raw.customWords)?raw.customWords:[],reviews:raw.reviews&&typeof raw.reviews==='object'&&!Array.isArray(raw.reviews)?raw.reviews:{}};}catch{return defaultState();}};
 let state=readState(),ep=EPISODES.find(e=>e.id===state.lastEpisode)||EPISODES[0],view='overview',category='全部',vocabFilter='all',practiceTab='blind',chosenCue=0,loopCueId=null,oneCueId=null,editCueId=null,dictationResult=null;
 let player=null,ytWaiting=false,ytPlayerReady=false,pendingPlay=false,playerEpisodeId=null,localAudioURL=null,playingLocal=false,tickAt=Date.now(),persistAt=Date.now(),lastPaint=-1;
 let recorder=null,micStream=null,recordTimer=null,recordStarted=0,recordParts=[],recordCurrent=null,recordUrls=[];
-let toastTimeout=null;
+let toastTimeout=null,ytWatchdog=null,warmupIndex=0,warmupResult=null,warmupReveal=false,warmupVoice='en-GB';
+let reviewQueue=[],reviewRevealed=false;
 
 const getP=(id)=>{state.progress[id]??={heard:[],total:0,last:0};return state.progress[id]};
 const completion=(id)=>Math.min(100,Math.round((new Set(getP(id).heard||[]).size/600)*100));
@@ -67,8 +69,10 @@ const sourceOpen=()=>window.open(ytUrl(),'_blank','noopener,noreferrer');
 const cueList=()=>state.transcripts[ep.id]||[];
 const allVocab=()=>[...EPISODES.flatMap(e=>e.vocab.map((v,i)=>({...v,key:`${e.id}:${i}`,episodeId:e.id,source:e.guest}))),...state.customWords.map(v=>({...v,tag:'PERSONAL',source:'我的添加',episodeId:null}))];
 const isSaved=(key)=>state.saved.includes(key);
+const dueWords=()=>allVocab().filter(v=>isSaved(v.key)&&isReviewDue(state.reviews[v.key]));
+const updateReviewBadge=()=>{const el=$('#reviewCount');if(el)el.textContent=String(dueWords().length);};
 const bookmarkButton=(key)=>`<button class="bookmark-btn ${isSaved(key)?'is-saved':''}" data-bookmark="${escapeHTML(key)}" aria-label="${isSaved(key)?'取消收藏':'收藏单词'}" title="收藏/取消收藏">${svg('bookmark')}</button>`;
-const addBookmark=(key)=>{if(isSaved(key))state.saved=state.saved.filter(x=>x!==key);else state.saved.push(key);persist();renderVocab();renderSide();renderOverview();notify(isSaved(key)?'已收藏到个人词库':'已取消收藏');};
+const addBookmark=(key)=>{if(isSaved(key))state.saved=state.saved.filter(x=>x!==key);else state.saved.push(key);persist();renderVocab();renderSide();renderOverview();updateReviewBadge();notify(isSaved(key)?'已收藏到个人词库':'已取消收藏');};
 const readableDate=(d)=>{try{return new Date(d).toLocaleDateString('zh-CN',{month:'short',day:'numeric'});}catch{return '—';}};
 
 function lessonCard(e){const pct=completion(e.id);return `<article class="lesson-card"><button class="card-thumb" data-episode="${e.id}" aria-label="开始学习 ${escapeHTML(e.title)}" style="padding:0;border:0;display:block;width:100%"><img loading="lazy" src="https://i.ytimg.com/vi/${e.videoId}/hqdefault.jpg" alt="原频道视频封面：${escapeHTML(e.guest)}"><span class="card-top-tag">${e.category}</span><span class="card-time">${timecode(e.start)} — ${timecode(e.end)}</span><span class="card-play">${svg('play')}</span></button><div class="card-body"><div class="card-eyebrow">${escapeHTML(e.focus)}</div><h3>${escapeHTML(e.title)}</h3><p class="card-subtitle">${escapeHTML(e.subtitle)}</p><div class="card-bottom"><span class="guest-name">${escapeHTML(e.guest)}</span><span class="level-pill">${escapeHTML(e.level)}</span></div><div class="card-progress"><span style="width:${pct}%"></span></div></div></article>`;}
@@ -84,38 +88,140 @@ function renderSide(){if(view!=='practice')return;$('#sideDescription').textCont
 $('#sideVocab').innerHTML=ep.vocab.map((v,i)=>{const key=`${ep.id}:${i}`;return `<div class="vocab-small"><div><strong>${escapeHTML(v.term)}</strong><small>${escapeHTML(v.cn)} · ${escapeHTML(v.tag)}</small></div>${bookmarkButton(key)}</div>`;}).join('');
 $('#sideExpressions').innerHTML=ep.phrases.map(p=>`<div class="expression-item"><strong>${escapeHTML(p.en)}</strong><p>${escapeHTML(p.cn)}</p><small>${escapeHTML(p.tip)}</small></div>`).join('');}
 function renderVocab(){const q=$('#vocabSearch').value.trim().toLowerCase();const all=allVocab();let selection=all.filter(v=>(vocabFilter==='all'||(vocabFilter==='saved'&&isSaved(v.key))||(vocabFilter==='mine'&&v.tag==='PERSONAL'))&&`${v.term} ${v.cn}`.toLowerCase().includes(q));selection.sort((a,b)=>Number(isSaved(b.key))-Number(isSaved(a.key)));
-$('#vocabSummary').innerHTML=`<div><strong>${state.saved.length}</strong><p>词语已收藏 · ${all.length} 个词条可浏览</p></div><div class="summary-symbol">${svg('bookmark')}</div>`;
-$('#vocabList').innerHTML=selection.length?selection.map(v=>`<article class="vocab-card"><div><h3>${escapeHTML(v.term)}</h3><p>${escapeHTML(v.cn)}</p><div class="word-tags"><span class="tag-small ${v.tag==='PERSONAL'?'mine':''}">${escapeHTML(v.tag)}</span><span class="tag-small">${escapeHTML(v.source)}</span></div>${v.sample?`<p class="example">${escapeHTML(v.sample)}</p>`:''}</div><div>${bookmarkButton(v.key)}${v.tag==='PERSONAL'?`<button class="bookmark-btn" aria-label="删除该词汇" title="删除" data-delete-word="${escapeHTML(v.key)}">${svg('trash')}</button>`:''}</div></article>`).join(''):`<div class="empty-state">${svg('bookmark')}<h3>还没有符合条件的词汇</h3><p>在视频课程中收藏高频表达，或者添加自己的词组。</p></div>`;
+$('#vocabSummary').innerHTML=`<div><strong>${state.saved.length}</strong><p>词语已收藏 · ${all.length} 个词条可浏览 · ${dueWords().length} 个需要复习</p></div><div class="summary-symbol">${svg('bookmark')}</div>`;
+$('#vocabList').innerHTML=selection.length?selection.map(v=>`<article class="vocab-card"><div><h3>${escapeHTML(v.term)}</h3><p>${escapeHTML(v.cn)}</p><div class="word-tags"><span class="tag-small ${v.tag==='PERSONAL'?'mine':''}">${escapeHTML(v.tag)}</span><span class="tag-small">${escapeHTML(v.source)}</span></div>${v.sample?`<p class="example">${escapeHTML(v.sample)}</p>`:''}</div><div><button class="bookmark-btn speak-word" data-speak-word="${escapeHTML(v.key)}" aria-label="朗读单词" title="朗读英文">${svg('volume')}</button>${bookmarkButton(v.key)}${v.tag==='PERSONAL'?`<button class="bookmark-btn" aria-label="删除该词汇" title="删除" data-delete-word="${escapeHTML(v.key)}">${svg('trash')}</button>`:''}</div></article>`).join(''):`<div class="empty-state">${svg('bookmark')}<h3>还没有符合条件的词汇</h3><p>在视频课程中收藏高频表达，或者添加自己的词组。</p></div>`;
 $$('[data-vfilter]').forEach(b=>b.classList.toggle('active',b.dataset.vfilter===vocabFilter));}
 function renderProgress(){const attempts=state.history.filter(h=>h.type==='dictation');const avg=attempts.length?Math.round(attempts.reduce((a,h)=>a+(Number(h.score)||0),0)/attempts.length):0;
 const boxes=[['headphones',`${totalMinutes()} min`,'累计学习时长'],['check',`${finished()} / ${EPISODES.length}`,'完成的10分钟片段'],['bookmark',String(state.saved.length),'已收藏词语'],['award',attempts.length?`${avg}%`:'—','听写平均词汇匹配率']];
 $('#progressStats').innerHTML=boxes.map(([i,v,label])=>`<div class="progress-stat">${svg(i)}<div class="big">${v}</div><small>${label}</small></div>`).join('');
 $('#progressLessons').innerHTML=EPISODES.map(e=>`<div class="progress-lesson"><div><strong>${escapeHTML(e.title)}</strong><small>${escapeHTML(e.guest)} · ${e.category}</small></div><div class="bar"><span style="width:${completion(e.id)}%"></span></div><span class="percent">${completion(e.id)}%</span></div>`).join('');
-const types={dictation:'听写',shadowing:'录音跟读',intensive:'逐句精听'};
-$('#progressHistory').innerHTML=state.history.length?state.history.slice(0,20).map(h=>`<div class="history-item"><div><strong>${types[h.type]||'学习'} · ${escapeHTML(EPISODES.find(e=>e.id===h.epId)?.guest||'课程')}</strong><small>${readableDate(h.at)} · ${escapeHTML(EPISODES.find(e=>e.id===h.epId)?.title||'')}</small></div><span class="result">${h.type==='dictation'?`${Math.round(h.score||0)}% match`:h.type==='shadowing'?'录音保存':'句子练习'}</span></div>`).join(''):`<div class="empty-state">${svg('bar-chart')}<h3>练习从今天开始</h3><p>完成第一次听写或跟读后，记录会自动出现在这里。</p></div>`;}
+const types={dictation:'听写',shadowing:'录音跟读',intensive:'逐句精听',warmup:'原创热身听写',review:'单词复习'};
+$('#progressHistory').innerHTML=state.history.length?state.history.slice(0,20).map(h=>`<div class="history-item"><div><strong>${types[h.type]||'学习'} · ${escapeHTML(EPISODES.find(e=>e.id===h.epId)?.guest||'课程')}</strong><small>${readableDate(h.at)} · ${escapeHTML(EPISODES.find(e=>e.id===h.epId)?.title||'')}</small></div><span class="result">${h.type==='dictation'?`${Math.round(h.score||0)}% match`:h.type==='shadowing'?'录音保存':h.type==='warmup'?`${Math.round(h.score||0)}% match`:h.type==='review'?'完成复习':'句子练习'}</span></div>`).join(''):`<div class="empty-state">${svg('bar-chart')}<h3>练习从今天开始</h3><p>完成第一次听写或跟读后，记录会自动出现在这里。</p></div>`;}
 
-function changeView(next){if(!['overview','library','practice','vocab','progress'].includes(next))next='overview';if(view==='practice'&&next!=='practice')pauseMedia();view=next;$$('.view').forEach(e=>e.classList.toggle('active',e.id===`view-${next}`));$$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===next));$('#breadcrumbView').textContent=({overview:'Overview',library:'Library',practice:'Practice',vocab:'Vocabulary',progress:'My Progress'})[next];$('#sidebar').classList.remove('open');window.scrollTo({top:0,behavior:'instant'});if(next==='overview')renderOverview();if(next==='library')renderLibrary();if(next==='practice')renderPractice();if(next==='vocab')renderVocab();if(next==='progress')renderProgress();try{history.replaceState(null,'',`#${next}`);}catch{}}
-function openEpisode(id){const found=EPISODES.find(e=>e.id===id);if(!found)return;endRecording();pauseMedia();removeAudio(false);ep=found;state.lastEpisode=id;persist();practiceTab='blind';chosenCue=0;loopCueId=null;oneCueId=null;editCueId=null;dictationResult=null;lastPaint=-1;changeView('practice');mountYoutube();}
+
+function speakText(sentence,language='en-GB'){
+  if(!('speechSynthesis' in window)||!window.SpeechSynthesisUtterance){notify('当前浏览器没有可用语音朗读。可以使用系统自带的朗读功能。');return;}
+  try{
+    window.speechSynthesis.cancel();
+    const utterance=new SpeechSynthesisUtterance(String(sentence));utterance.lang=language;
+    utterance.rate=Math.min(1.4,Math.max(.7,Number($('#playSpeed')?.value)||.92));utterance.pitch=1;
+    const voices=window.speechSynthesis.getVoices?.()||[];
+    const voice=voices.find(v=>v.lang.toLowerCase()===language.toLowerCase())||voices.find(v=>v.lang.toLowerCase().startsWith(language.slice(0,2).toLowerCase()));
+    if(voice)utterance.voice=voice;
+    window.speechSynthesis.speak(utterance);
+  }catch{notify('朗读暂时不可用，请检查系统语音设置。');}
+}
+function stopSpeech(){try{window.speechSynthesis?.cancel();}catch{}}
+function resetReviewQueue(includeFuture=false){
+  reviewQueue=allVocab().filter(v=>isSaved(v.key)&&(includeFuture||isReviewDue(state.reviews[v.key])))
+    .sort((a,b)=>String(state.reviews[a.key]?.dueAt||'').localeCompare(String(state.reviews[b.key]?.dueAt||'')));
+  reviewRevealed=false;
+}
+function renderReview(){
+  const saved=allVocab().filter(v=>isSaved(v.key));const due=dueWords().length;
+  $('#reviewOverview').innerHTML=`<div><strong>${due}</strong><span>待复习词汇</span></div><div><strong>${saved.length}</strong><span>已收藏词汇</span></div><div><strong>${state.history.filter(h=>h.type==='review').length}</strong><span>累计复习次数</span></div>`;
+  const current=reviewQueue[0];
+  if(!current){$('#reviewCard').innerHTML=`<div class="review-complete">${svg(saved.length?'check':'bookmark')}<h2>${saved.length?'今日词汇已复习完毕':'词库还是空的'}</h2><p>${saved.length?'已到期的生词全部完成。你也可以复习全部收藏。':'先到「我的词库」收藏几个英语表达，再开始记忆训练。'}</p>${saved.length?'<button class="button button-dark" id="reviewAll">复习全部收藏</button>':'<button class="button button-dark" id="reviewBrowse">浏览主题词汇</button>'}</div>`;return;}
+  $('#reviewCard').innerHTML=`<div class="review-card-head"><span>RECALL · ${reviewQueue.length} REMAINING</span><span>${escapeHTML(current.tag)}</span></div>
+    <div class="review-main-term">${escapeHTML(current.term)}</div>
+    <div class="review-actions-top"><button class="inline-btn secondary" data-review-speak="${escapeHTML(current.key)}">${svg('volume')} 发音</button><button class="inline-btn" id="revealReview">${svg('eye')} ${reviewRevealed?'隐藏解释':'翻面看中文'}</button></div>
+    ${reviewRevealed?`<div class="review-revealed"><strong>${escapeHTML(current.cn)}</strong><span>来源：${escapeHTML(current.source)}</span>${current.sample?`<p>${escapeHTML(current.sample)}</p>`:''}</div><div class="review-rating"><button data-review-rating="again">再学 <small>10 min</small></button><button data-review-rating="hard">困难 <small>8 h+</small></button><button data-review-rating="good">记住 <small>1 day+</small></button><button data-review-rating="easy">轻松 <small>4 days+</small></button></div>`:`<p class="review-instruction">先在心里回想中文释义，再点击「翻面看中文」。</p>`}`;
+}
+function rateReview(rating){
+  const v=reviewQueue.shift();if(!v)return;
+  state.reviews[v.key]=scheduleReview(state.reviews[v.key],rating);
+  saveHistory('review',{key:v.key,rating});reviewRevealed=false;
+  updateReviewBadge();renderReview();renderVocab();
+}
+function exportQuizlet(){
+  const items=allVocab().filter(v=>isSaved(v.key));
+  if(!items.length){notify('请先收藏词汇，再导出 Quizlet TSV。');return;}
+  const data=quizletTSV(items);downloadBlob(new Blob(['\uFEFF'+data],{type:'text/tab-separated-values;charset=utf-8'}),`ceo-english-lab-quizlet-${new Date().toISOString().slice(0,10)}.tsv`);
+  notify(`已导出 ${data.split('\n').length} 条词汇，可直接导入 Quizlet。`);
+}
+function shareEpisode(){
+  const link=location.href.split('#')[0]+`#practice/${ep.id}`;
+  if(navigator.clipboard?.writeText){navigator.clipboard.writeText(link).then(()=>notify('已复制本课程直达链接。')).catch(()=>window.prompt('复制课程链接',link));}
+  else window.prompt('复制课程链接',link);
+}
+function removeTranscript(){if(!cueList().length)return;if(!confirm('删除当前课程保存在此浏览器的授权字幕？此操作不影响其他课程。'))return;
+  delete state.transcripts[ep.id];persist();chosenCue=0;dictationResult=null;renderPractice();notify('已从本机移除当前课程字幕。');}
+function exportTranscript(){if(!cueList().length){notify('请先导入授权字幕。');return;}
+  const data=exportSRT(cueList(),ep.start);
+  downloadBlob(new Blob([data],{type:'text/plain;charset=utf-8'}),`${ep.id}-clip-relative.srt`);notify('已导出当前片段字幕，时间从 00:00 开始。');}
+let previewToken=0;
+async function previewTranscript(){
+  const token=++previewToken;
+  const target=EPISODES.find(e=>e.id===$('#transcriptEpisode').value)||ep;
+  const pasted=$('#transcriptPaste').value.trim(),file=$('#transcriptFile').files?.[0];
+  const output=$('#transcriptPreview');if(!output)return;
+  if(!pasted&&!file){output.textContent='选择字幕文件后可先预览时间码匹配情况。';return;}
+  if(file?.size>900000&&!pasted){output.textContent='字幕文件过大，请缩小到 900 KB 以下。';return;}
+  try{const raw=pasted||await file.text();if(token!==previewToken)return;
+    const list=parseTranscript(raw,{start:target.start,end:target.end,timebase:$('#timebase').value});
+    output.innerHTML=list.length?`<strong>匹配到 ${list.length} 条字幕</strong><p>首句 ${timecode(list[0].start-target.start)} · ${escapeHTML(list[0].text.slice(0,140))}</p><p>末句 ${timecode(list[list.length-1].start-target.start)} · ${escapeHTML(list[list.length-1].text.slice(0,140))}</p><small>${list.some(x=>x.estimated)?'纯文本暂无精确时间码，系统已估算定位。':'请核对时间是否落在所选的10分钟片段内。'}</small>`:'<strong>未匹配任何片段内字幕</strong><p>请检查时间基准（原长视频绝对时间或片段相对时间）。</p>';
+  }catch{output.textContent='无法预览此字幕文件，请确认文本编码与格式。';}
+}
+
+function changeView(next){
+  if(!['overview','library','practice','vocab','review','progress'].includes(next))next='overview';
+  if(view==='practice'&&next!=='practice'){pauseMedia();stopSpeech();}
+  view=next;
+  $$('.view').forEach(e=>e.classList.toggle('active',e.id===`view-${next}`));
+  $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===next));
+  $('#breadcrumbView').textContent=({overview:'Overview',library:'Library',practice:'Practice',vocab:'Vocabulary',review:'Daily Review',progress:'My Progress'})[next];
+  $('#sidebar').classList.remove('open');window.scrollTo({top:0,behavior:'instant'});
+  if(next==='overview')renderOverview();
+  if(next==='library')renderLibrary();
+  if(next==='practice'){renderPractice();if(!player||playerEpisodeId!==ep.id)mountYoutube();}
+  if(next==='vocab')renderVocab();
+  if(next==='review'){resetReviewQueue();renderReview();}
+  if(next==='progress')renderProgress();
+  updateReviewBadge();
+  try{history.replaceState(null,'',next==='practice'?`#practice/${ep.id}`:`#${next}`);}catch{}
+}
+function openEpisode(id){
+  const found=EPISODES.find(e=>e.id===id);if(!found)return;
+  endRecording();pauseMedia();stopSpeech();removeAudio(false);
+  ep=found;state.lastEpisode=id;persist();practiceTab='blind';chosenCue=0;
+  loopCueId=null;oneCueId=null;editCueId=null;dictationResult=null;
+  warmupIndex=0;warmupResult=null;warmupReveal=false;lastPaint=-1;
+  changeView('practice');
+}
 
 function renderPractice(){const pct=completion(ep.id);$('#practiceKicker').textContent=`${ep.category} · ${ep.level} · 10-MIN FOCUS`;$('#practiceTitle').textContent=ep.title;$('#practiceSubtitle').textContent=ep.subtitle;$('#completionPill').textContent=`${pct}% completed`;
 $('#transcriptStatus').textContent=cueList().length?`${cueList().length} 句已导入`:'未导入逐字稿';$('#transcriptStatus').classList.toggle('ready',cueList().length>0);
+$('#exportTranscript').hidden=!cueList().length;$('#deleteTranscript').hidden=!cueList().length;
 $$('#practiceTabs button').forEach(b=>{b.classList.toggle('active',b.dataset.tab===practiceTab);b.setAttribute('aria-selected',b.dataset.tab===practiceTab?'true':'false');});renderPracticeContent();renderSide();paintPlayer();}
-function changeTab(tab){if(!['blind','intensive','dictation','shadowing'].includes(tab))return;endRecording();practiceTab=tab;oneCueId=null;loopCueId=null;dictationResult=null;editCueId=null;renderPractice();}
+function changeTab(tab){if(!['blind','intensive','dictation','shadowing','warmup'].includes(tab))return;endRecording();stopSpeech();practiceTab=tab;oneCueId=null;loopCueId=null;dictationResult=null;warmupResult=null;warmupReveal=false;editCueId=null;renderPractice();}
 function emptyCue(){return `<div class="prompt-empty">${svg('upload-cloud')}<strong>先导入与本视频对应的授权字幕</strong><p>支持 SRT、VTT、带时间戳的 TXT/TSV、JSON 或逐字稿。导入后可逐句精听、自动听写评分与跟读。</p><button class="inline-btn" data-open-import>${svg('upload')} 导入授权字幕</button></div>`;}
 function renderPracticeContent(){const cues=cueList();let html='';
 if(practiceTab==='blind'){html=`<div class="blind-illustration"><div class="wave">${[22,41,60,30,65,45,24,55,40,61,29,42,25].map((h,i)=>`<span style="--h:${h}px;--d:${i*.07}s"></span>`).join('')}</div><div class="lock-chip">${svg('lock')} 练习稿已隐藏</div></div><h3>先听懂观点，再寻找每一个词。</h3><p>点击上方播放，试着回答：嘉宾在解释什么？给出了什么证据？论证如何展开？</p><div class="helper-actions"><button class="inline-btn" data-start-listening>${svg('play')} 开始盲听</button><button class="inline-btn secondary" data-switch="intensive">进入逐句精听 ${svg('arrow-right')}</button></div><p class="muted-note" style="margin-top:15px">隐藏的是本站练习稿。YouTube 视频内的字幕请在播放器中关闭；真正的纯音频模式可在播放器下方导入你有权使用的音频文件。</p>`;}
 if(practiceTab==='intensive'){html=cues.length?`<div class="dictation-target"><span>点击句子时间跳转，${svg('repeat')} 可循环一句。</span><button class="inline-btn secondary" data-open-import>${svg('upload')} 更换字幕</button></div><div class="cue-list">${cues.map((c,i)=>`<div class="cue-row" data-cue="${i}"><button class="cue-time" data-cue-play="${i}" aria-label="播放句子 ${i+1}">${timecode(c.start-ep.start)}</button><div>${editCueId===c.id?`<textarea class="cue-edit" data-edit-input="${i}" rows="2">${escapeHTML(c.text)}</textarea><div class="cue-edit-actions"><button data-save-cue="${i}">保存</button><button data-cancel-edit>取消</button></div>`:`<div class="cue-text" data-cue-play="${i}">${highlightVocab(escapeHTML(c.text))}</div>${c.estimated?'<small style="color:#ba9f68">时间为估算值</small>':''}`}</div><div class="cue-actions"><button data-cue-loop="${i}" class="${loopCueId===c.id?'selected':''}" aria-label="循环此句" title="循环此句">${svg('repeat')}</button><button data-cue-edit="${i}" aria-label="编辑句子" title="编辑句子">${svg('edit')}</button></div></div>`).join('')}</div>`:emptyCue();}
 if(practiceTab==='dictation'){if(!cues.length)html=emptyCue();else{const c=cues[Math.min(chosenCue,cues.length-1)];html=`<div class="dictation-target"><span>选择句子，然后先听后写</span><select id="dictationCue" aria-label="听写句子">${cues.map((x,i)=>`<option value="${i}" ${i===chosenCue?'selected':''}>第 ${i+1} 句 · ${timecode(x.start-ep.start)} (${Math.round(x.end-x.start)}s)</option>`).join('')}</select></div><div class="helper-actions" style="margin:0 0 13px"><button class="inline-btn" data-cue-once="${chosenCue}">${svg('volume')} 播放当前句</button><button class="inline-btn secondary" data-repeat-cue="${chosenCue}">${svg('repeat')} 再听一次</button></div><textarea id="dictationAnswer" class="dictation-answer" rows="4" spellcheck="false" placeholder="Type exactly what you hear. 不用担心标点和大小写。"></textarea><div class="helper-actions"><button class="button button-dark" id="submitDictation">检查我的听写 ${svg('check')}</button><button class="inline-btn secondary" id="nextDictation">下一句 ${svg('arrow-right')}</button></div>${dictationResult?`<div class="check-result"><span class="grade">${dictationResult.score}%</span> <span>词汇匹配率（非语音识别评分）</span><div class="reference">${escapeHTML(c.text)}</div><p class="diff">${dictationResult.missing.length?`遗漏：${escapeHTML(dictationResult.missing.join(' · '))}`:'无遗漏'}${dictationResult.extra.length?`　多写：${escapeHTML(dictationResult.extra.join(' · '))}`:''}</p></div>`:''}`;}}
 if(practiceTab==='shadowing'){if(!cues.length)html=emptyCue();else{const c=cues[Math.min(chosenCue,cues.length-1)];html=`<div class="shadow-select"><span style="font-size:11px;color:#8a94a3">选择跟读句</span><select id="shadowCue" aria-label="选择跟读句子">${cues.map((x,i)=>`<option value="${i}" ${i===chosenCue?'selected':''}>第 ${i+1} 句 · ${timecode(x.start-ep.start)}</option>`).join('')}</select></div><div class="recording-guide"><strong>${escapeHTML(c.text)}</strong><p style="margin:9px 0 0">先听原声，模仿重音、节奏与停顿。录音后回听对照。本版本不使用 AI 语音打分。</p></div><div class="recording-buttons"><button class="inline-btn" data-cue-once="${chosenCue}">${svg('volume')} 听原声</button><button class="record-btn ${recorder?.state==='recording'?'recording':''}" id="recordToggle">${svg(recorder?.state==='recording'?'stop':'mic')}${recorder?.state==='recording'?'停止录音':'开始跟读录音'}</button><span class="record-time" id="recordClock">${recorder?.state==='recording'?'00:00':''}</span></div><audio id="latestRecording" class="recording-audio" controls hidden></audio><div class="recordings-list" id="recordingsList"></div><p class="muted-note" style="margin:15px 0 0">录音需要 HTTPS 和麦克风授权；仅在本机浏览器的 IndexedDB 保存。</p>`;}}
-$('#practiceContent').innerHTML=html;if(practiceTab==='shadowing'&&cues.length)renderRecordings();if(practiceTab==='intensive')highlightActiveCue();}
+if(practiceTab==='warmup'){
+  const pack=WARMUPS[ep.id]||[];
+  warmupIndex=Math.max(0,Math.min(warmupIndex,pack.length-1));
+  const item=pack[warmupIndex];
+  html=`<div class="warmup-disclaimer">${svg('shield')} <span><strong>原创练习内容，不是原视频逐字稿或嘉宾原话。</strong>示范朗读由浏览器语音合成完成，不会提取 YouTube 音频。</span></div>
+  <div class="warmup-toolbar"><span class="warmup-count">EXERCISE ${warmupIndex+1} / ${pack.length}</span><label>朗读口音 <select id="warmupVoice"><option value="en-GB" ${warmupVoice==='en-GB'?'selected':''}>英式</option><option value="en-US" ${warmupVoice==='en-US'?'selected':''}>美式</option></select></label></div>
+  <p class="warmup-hint">${escapeHTML(item.zh)}</p><p class="warmup-tip">${escapeHTML(item.tip)}</p>
+  <div class="helper-actions"><button class="inline-btn" id="playWarmup">${svg('volume')} 朗读英语示范</button><button class="inline-btn secondary" id="showWarmup">${svg('eye')} ${warmupReveal?'隐藏参考':'显示参考'}</button></div>
+  <textarea id="warmupAnswer" class="dictation-answer" rows="3" spellcheck="false" placeholder="听示范并输入听到的句子，或者尝试自己翻译上面的中文。"></textarea>
+  <div class="helper-actions"><button class="button button-dark" id="checkWarmup">${svg('check')} 检查输入</button><button class="inline-btn secondary" id="nextWarmup">下一句 ${svg('arrow-right')}</button></div>
+  ${warmupResult?`<div class="check-result"><span class="grade">${warmupResult.score}%</span> <span>文字匹配率</span><div class="reference">${escapeHTML(item.en)}</div><p class="diff">${warmupResult.missing.length?'遗漏：'+escapeHTML(warmupResult.missing.join(' · ')):'没有遗漏'}${warmupResult.extra.length?'；多写：'+escapeHTML(warmupResult.extra.join(' · ')):''}</p></div>`:warmupReveal?`<div class="warmup-reveal">${escapeHTML(item.en)}</div>`:''}
+  <div class="warmup-shadow"><strong>再读一遍，录音回听</strong><p>设备麦克风录音只在当前浏览器保存；不会上传到云端，也不会自动给发音打分。</p><button class="record-btn ${recorder?.state==='recording'?'recording':''}" id="recordToggle">${svg(recorder?.state==='recording'?'stop':'mic')} ${recorder?.state==='recording'?'停止录音':'跟读录音'}</button><span class="record-time" id="recordClock"></span><div class="recordings-list" id="recordingsList"></div></div>`;
+}
+$('#practiceContent').innerHTML=html;if((practiceTab==='shadowing'&&cues.length)||practiceTab==='warmup')renderRecordings();if(practiceTab==='intensive')highlightActiveCue();}
 function highlightVocab(html){let text=html;for(const v of ep.vocab){const w=v.term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');try{text=text.replace(new RegExp(`\\b(${w})\\b`,'gi'),'<mark>$1</mark>');}catch{}}return text;}
 
-function mountYoutube(){if(!safeYoutubeId(ep.videoId))return;const requested=ep.id;ytPlayerReady=false;playerEpisodeId=requested;pendingPlay=false;$('#playerFallback').hidden=true;
+function mountYoutube(){if(!safeYoutubeId(ep.videoId))return;clearTimeout(ytWatchdog);const requested=ep.id;ytPlayerReady=false;playerEpisodeId=requested;pendingPlay=false;$('#playerFallback').hidden=true;ytWatchdog=setTimeout(()=>{if(view==='practice'&&!ytPlayerReady&&!playingLocal)$('#playerFallback').hidden=false;},14000);
 if(player?.destroy){try{player.destroy();}catch{}}player=null;if(!$('#ytHost')){const fresh=document.createElement('div');fresh.id='ytHost';fresh.className='yt-host';$('.player-stage').prepend(fresh);}$('#ytHost').innerHTML=`<div class="youtube-placeholder"><span class="spinner"></span><span>正在加载官方嵌入播放器…</span></div>`;
 if(window.YT?.Player){createYT(requested);return;}
 if(!ytWaiting){ytWaiting=true;window.onYouTubeIframeAPIReady=()=>{ytWaiting=false;createYT(playerEpisodeId);};let s=document.createElement('script');s.src='https://www.youtube.com/iframe_api';s.onerror=()=>{$('#playerFallback').hidden=false;ytWaiting=false;};document.head.appendChild(s);}}
 function createYT(requested){if(view!=='practice'||requested!==ep.id||!window.YT?.Player)return;const episode=ep;
-try{player=new window.YT.Player('ytHost',{videoId:episode.videoId,host:'https://www.youtube-nocookie.com',playerVars:{playsinline:1,controls:1,rel:0,cc_load_policy:0,start:episode.start,end:episode.end,enablejsapi:1,origin:location.origin==='null'?undefined:location.origin},events:{onReady:()=>{if(episode.id!==ep.id)return;ytPlayerReady=true;const p=getP(ep.id);try{player.seekTo(ep.start+Math.min(599,Math.max(0,p.last||0)),true);}catch{}if(pendingPlay){pendingPlay=false;player.playVideo();}notify('播放器已就绪。');},onError:()=>{$('#playerFallback').hidden=false;ytPlayerReady=false;},onStateChange:ev=>{if(ev.data===0&&episode.id===ep.id){pauseMedia();}}}});}catch{$('#playerFallback').hidden=false;}}
+try{player=new window.YT.Player('ytHost',{videoId:episode.videoId,host:'https://www.youtube-nocookie.com',playerVars:{playsinline:1,controls:1,rel:0,cc_load_policy:0,start:episode.start,end:episode.end,enablejsapi:1,origin:location.origin==='null'?undefined:location.origin},events:{onReady:()=>{if(episode.id!==ep.id)return;ytPlayerReady=true;clearTimeout(ytWatchdog);$('#playerFallback').hidden=true;const p=getP(ep.id);try{player.seekTo(ep.start+Math.min(599,Math.max(0,p.last||0)),true);}catch{}if(pendingPlay){pendingPlay=false;player.playVideo();}notify('播放器已就绪。');},onError:()=>{$('#playerFallback').hidden=false;ytPlayerReady=false;clearTimeout(ytWatchdog);},onStateChange:ev=>{if(ev.data===0&&episode.id===ep.id){pauseMedia();}}}});}catch{$('#playerFallback').hidden=false;}}
 function getPos(){if(playingLocal){const a=$('#studyAudio');return ep.start+(Number(a.currentTime)||0);}try{if(ytPlayerReady&&typeof player?.getCurrentTime==='function')return Number(player.getCurrentTime())||ep.start;}catch{}return ep.start+Math.max(0,getP(ep.id).last||0);}
 function isMediaPlaying(){if(playingLocal)return !$('#studyAudio').paused;try{return ytPlayerReady&&player?.getPlayerState()===window.YT.PlayerState.PLAYING;}catch{return false;}}
 function pauseMedia(){try{player?.pauseVideo?.();}catch{}$('#studyAudio').pause();}
@@ -130,10 +236,10 @@ if(now-persistAt>2400){persist();persistAt=now;} }
 tickAt=now;if(Math.abs(pos-lastPaint)>=.8||!playing){paintPlayer();lastPaint=pos;}}
 function paintPlayer(){if(view!=='practice')return;const pos=getPos();const elapsed=Math.max(0,Math.min(600,pos-ep.start));$('#seekSlider').value=String(Math.round(elapsed));$('#playerTime').textContent=`${timecode(elapsed)} / 10:00`;$('#togglePlay').innerHTML=svg(isMediaPlaying()?'pause':'play');$('#completionPill').textContent=`${completion(ep.id)}% completed`;highlightActiveCue();}
 function highlightActiveCue(){if(practiceTab!=='intensive')return;const pos=getPos();$$('.cue-row').forEach(el=>{const c=cueList()[Number(el.dataset.cue)];el.classList.toggle('active',c&&c.start<=pos&&pos<c.end);});}
-function removeAudio(announce=true){pauseMedia();playingLocal=false;if(localAudioURL){URL.revokeObjectURL(localAudioURL);localAudioURL=null;}$('#studyAudio').removeAttribute('src');$('#studyAudio').load();$('#audioFile').value='';$('#removeAudio').hidden=true;if(announce)notify('已切回 YouTube 原视频模式。');}
-function importAudio(file){if(!file||!file.type.startsWith('audio/')){notify('请选择有效的音频文件。');return;}pauseMedia();if(localAudioURL)URL.revokeObjectURL(localAudioURL);localAudioURL=URL.createObjectURL(file);const audio=$('#studyAudio');audio.src=localAudioURL;audio.currentTime=0;audio.load();playingLocal=true;$('#removeAudio').hidden=false;playbackRate($('#playSpeed').value);notify('已切换到授权本地音频。默认按10分钟片段起点对齐。');}
+function removeAudio(announce=true){pauseMedia();playingLocal=false;$('#audioOnlyPane').hidden=true;$('.player-stage').classList.remove('audio-selected');if(localAudioURL){URL.revokeObjectURL(localAudioURL);localAudioURL=null;}$('#studyAudio').removeAttribute('src');$('#studyAudio').load();$('#audioFile').value='';$('#removeAudio').hidden=true;if(announce)notify('已切回 YouTube 原视频模式。');}
+function importAudio(file){if(!file||!file.type.startsWith('audio/')){notify('请选择有效的音频文件。');return;}pauseMedia();if(localAudioURL)URL.revokeObjectURL(localAudioURL);localAudioURL=URL.createObjectURL(file);const audio=$('#studyAudio');audio.src=localAudioURL;audio.currentTime=0;audio.load();playingLocal=true;$('#audioOnlyPane').hidden=false;$('.player-stage').classList.add('audio-selected');$('#playerFallback').hidden=true;$('#removeAudio').hidden=false;playbackRate($('#playSpeed').value);notify('已切换到授权本地音频。默认按10分钟片段起点对齐。');}
 
-function openImport(){const select=$('#transcriptEpisode');select.innerHTML=EPISODES.map(e=>`<option value="${e.id}" ${e.id===ep.id?'selected':''}>${e.category} · ${escapeHTML(e.guest)} · ${escapeHTML(e.title)}</option>`).join('');$('#transcriptFile').value='';$('#transcriptPaste').value='';$('#uploadTitle').textContent='选择文件（SRT、VTT、TXT、JSON、TSV）';$('#importError').textContent='';$('#timebase').value='auto';$('#importDialog').showModal();}
+function openImport(){const select=$('#transcriptEpisode');select.innerHTML=EPISODES.map(e=>`<option value="${e.id}" ${e.id===ep.id?'selected':''}>${e.category} · ${escapeHTML(e.guest)} · ${escapeHTML(e.title)}</option>`).join('');$('#transcriptFile').value='';$('#transcriptPaste').value='';$('#uploadTitle').textContent='选择文件（SRT、VTT、TXT、JSON、TSV）';$('#importError').textContent='';$('#timebase').value='auto';$('#transcriptPreview').textContent='选择字幕文件后可先预览时间码匹配情况。';$('#importDialog').showModal();}
 async function importTranscript(){const target=EPISODES.find(e=>e.id===$('#transcriptEpisode').value),file=$('#transcriptFile').files?.[0];if(!target)return;const raw=$('#transcriptPaste').value.trim()||(file?await file.text():'');if(!raw.trim()){$('#importError').textContent='请先选择文件或粘贴字幕内容。';return;}if(raw.length>900_000){$('#importError').textContent='字幕文本过大，请导入不超过 900 KB 的文件。';return;}
 const cues=parseTranscript(raw,{start:target.start,end:target.end,timebase:$('#timebase').value});if(!cues.length){$('#importError').textContent='没能匹配到片段内字幕。请检查时间基准或时间码格式。';return;}
 state.transcripts[target.id]=cues;persist();$('#importDialog').close();notify(`已导入 ${cues.length} 句字幕，保存在当前浏览器。`);if(target.id!==ep.id){openEpisode(target.id);}else if(view==='practice')renderPractice();}
@@ -144,15 +250,15 @@ async function dbAdd(record){const db=await openDB();return new Promise((resolve
 async function dbGetByEpisode(id){const db=await openDB();return new Promise((resolve,reject)=>{const req=db.transaction('recordings').objectStore('recordings').index('episodeId').getAll(id);req.onsuccess=()=>resolve(req.result||[]);req.onerror=()=>reject(req.error);});}
 async function dbRemove(id){const db=await openDB();return new Promise((resolve,reject)=>{const tx=db.transaction('recordings','readwrite');tx.objectStore('recordings').delete(id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});}
 async function beginRecording(){if(recorder?.state==='recording'){endRecording();return;}if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){notify('此浏览器不支持录音。请使用最新版 Safari / Chrome 的 HTTPS 页面。');return;}
-try{micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});const types=['audio/webm;codecs=opus','audio/mp4','audio/webm'];const mime=types.find(x=>MediaRecorder.isTypeSupported(x));recorder=mime?new MediaRecorder(micStream,{mimeType:mime}):new MediaRecorder(micStream);recordParts=[];recordStarted=Date.now();const thisEp=ep.id,thisCue=cueList()[chosenCue]?.id||null;
+try{micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});const types=['audio/webm;codecs=opus','audio/mp4','audio/webm'];const mime=types.find(x=>MediaRecorder.isTypeSupported(x));recorder=mime?new MediaRecorder(micStream,{mimeType:mime}):new MediaRecorder(micStream);recordParts=[];recordStarted=Date.now();const thisEp=ep.id,thisCue=practiceTab==='warmup'?`warmup-${warmupIndex+1}`:cueList()[chosenCue]?.id||null;
 recorder.ondataavailable=e=>{if(e.data.size)recordParts.push(e.data);};recorder.onstop=async()=>{try{const blob=new Blob(recordParts,{type:recorder.mimeType||'audio/webm'});if(blob.size>0){await dbAdd({id:`rec-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,episodeId:thisEp,cueId:thisCue,createdAt:new Date().toISOString(),blob});if(ep.id===thisEp&&view==='practice')await renderRecordings();saveHistory('shadowing',{epId:thisEp,cueId:thisCue});notify('录音已保存在此设备。');}}catch{notify('录音保存失败，请检查浏览器存储权限。');}finally{micStream?.getTracks().forEach(t=>t.stop());micStream=null;}};
 recorder.start();$('#recordToggle').innerHTML=`${svg('stop')} 停止录音`;$('#recordToggle').classList.add('recording');recordTimer=setInterval(()=>{const t=$('#recordClock');if(t)t.textContent=timecode((Date.now()-recordStarted)/1000);if(Date.now()-recordStarted>61000)endRecording();},300);notify('开始录音，请跟读原句。最长60秒。');}catch(e){micStream?.getTracks().forEach(t=>t.stop());notify(e?.name==='NotAllowedError'?'麦克风权限被拒绝，请在浏览器设置中允许访问。':'麦克风暂时不可用，请检查设备权限。');}}
 function endRecording(){if(recordTimer)clearInterval(recordTimer);recordTimer=null;if(recorder?.state==='recording'){try{recorder.stop();}catch{}}const btn=$('#recordToggle');if(btn){btn.innerHTML=`${svg('mic')} 开始跟读录音`;btn.classList.remove('recording');}}
-async function renderRecordings(){for(const u of recordUrls)URL.revokeObjectURL(u);recordUrls=[];const root=$('#recordingsList');if(!root)return;try{const records=(await dbGetByEpisode(ep.id)).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,10);if(!$('#recordingsList'))return;root.innerHTML=records.map(r=>{const url=URL.createObjectURL(r.blob);recordUrls.push(url);return `<div class="recorded-item"><span>${readableDate(r.createdAt)} · ${escapeHTML(r.cueId||'语音')}</span><audio controls preload="none" src="${url}"></audio><button class="bookmark-btn" aria-label="删除录音" data-delete-rec="${escapeHTML(r.id)}">${svg('trash')}</button></div>`;}).join('');if(!records.length)root.innerHTML='<p class="muted-note">暂无录音记录。录下第一句后就会出现在这里。</p>';}catch{root.innerHTML='<p class="muted-note">此浏览器不支持保存录音，但仍可尝试录制并回听。</p>';}}
+async function renderRecordings(){for(const u of recordUrls)URL.revokeObjectURL(u);recordUrls=[];const root=$('#recordingsList');if(!root)return;try{const requestedEpisode=ep.id;const records=(await dbGetByEpisode(requestedEpisode)).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,10);if(!$('#recordingsList')||ep.id!==requestedEpisode)return;root.innerHTML=records.map(r=>{const url=URL.createObjectURL(r.blob);recordUrls.push(url);return `<div class="recorded-item"><span>${readableDate(r.createdAt)} · ${escapeHTML(r.cueId||'语音')}</span><audio controls preload="none" src="${url}"></audio><button class="bookmark-btn" aria-label="删除录音" data-delete-rec="${escapeHTML(r.id)}">${svg('trash')}</button></div>`;}).join('');if(!records.length)root.innerHTML='<p class="muted-note">暂无录音记录。录下第一句后就会出现在这里。</p>';}catch{root.innerHTML='<p class="muted-note">此浏览器不支持保存录音，但仍可尝试录制并回听。</p>';}}
 
 function createBackup(){const blob=new Blob([exportJSON(state)],{type:'application/json;charset=utf-8'});downloadBlob(blob,`ceo-english-lab-backup-${new Date().toISOString().slice(0,10)}.json`);notify('已导出学习备份（不含录音文件）。');}
 function downloadBlob(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.style.display='none';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);}
-async function restoreBackup(file){if(!file)return;try{if(file.size>8*1024*1024)throw Error('备份文件超过 8 MB');const obj=JSON.parse(await file.text());if(!validBackup(obj))throw Error('这不是 CEO English Lab v1 备份');const d=obj.data;state={...state,progress:{...state.progress,...(d.progress||{})},saved:[...new Set([...state.saved,...(Array.isArray(d.saved)?d.saved:[])])],history:[...state.history,...(Array.isArray(d.history)?d.history:[])].sort((a,b)=>String(b.at).localeCompare(String(a.at))).slice(0,300),transcripts:{...state.transcripts,...(d.transcripts||{})},customWords:[...state.customWords,...(Array.isArray(d.customWords)?d.customWords:[])],lastEpisode:state.lastEpisode};persist();$('#backupDialog').close();renderOverview();renderVocab();renderProgress();renderPractice();notify('备份已成功导入。不同设备间需手动迁移。');}catch(e){notify(`导入失败：${e.message||'文件格式有误'}`);}}
+async function restoreBackup(file){if(!file)return;try{if(file.size>8*1024*1024)throw Error('备份文件超过 8 MB');const obj=JSON.parse(await file.text());if(!validBackup(obj))throw Error('这不是 CEO English Lab v1 备份');const d=obj.data;state={...state,progress:{...state.progress,...(d.progress||{})},saved:[...new Set([...state.saved,...(Array.isArray(d.saved)?d.saved:[])])],history:[...state.history,...(Array.isArray(d.history)?d.history:[])].sort((a,b)=>String(b.at).localeCompare(String(a.at))).slice(0,300),transcripts:{...state.transcripts,...(d.transcripts||{})},reviews:{...state.reviews,...(d.reviews&&typeof d.reviews==='object'?d.reviews:{})},customWords:[...state.customWords,...(Array.isArray(d.customWords)?d.customWords:[])],lastEpisode:state.lastEpisode};persist();$('#backupDialog').close();renderOverview();renderVocab();renderProgress();renderPractice();updateReviewBadge();notify('备份已成功导入。不同设备间需手动迁移。');}catch(e){notify(`导入失败：${e.message||'文件格式有误'}`);}}
 
 function bindEvents(){
 $$('[data-icon]').forEach(e=>e.innerHTML=svg(e.dataset.icon));$('#libraryCount').textContent=String(EPISODES.length);
@@ -161,7 +267,7 @@ $('#heroStart').addEventListener('click',()=>openEpisode('sinek-ai'));$('#seeAll
 $('#categoryFilters').addEventListener('click',e=>{const b=e.target.closest('[data-category]');if(b){category=b.dataset.category;renderLibrary();}});
 $('#lessonSearch').addEventListener('input',renderLibrary);
 $('#featuredGrid').addEventListener('click',selectCard);$('#libraryGrid').addEventListener('click',selectCard);
-$('#backLibrary').addEventListener('click',()=>changeView('library'));$('#openSource').addEventListener('click',sourceOpen);$('#fallbackOpen').addEventListener('click',sourceOpen);
+$('#backLibrary').addEventListener('click',()=>changeView('library'));$('#shareLesson').addEventListener('click',shareEpisode);$('#exportTranscript').addEventListener('click',exportTranscript);$('#deleteTranscript').addEventListener('click',removeTranscript);$('#openSource').addEventListener('click',sourceOpen);$('#fallbackOpen').addEventListener('click',sourceOpen);
 $('#togglePlay').addEventListener('click',toggleMedia);$('#seekBack').addEventListener('click',()=>mediaSeek(getPos()-5));$('#seekForward').addEventListener('click',()=>mediaSeek(getPos()+5));$('#seekSlider').addEventListener('input',e=>mediaSeek(ep.start+Number(e.target.value)));$('#playSpeed').addEventListener('change',e=>playbackRate(e.target.value));$('#audioFile').addEventListener('change',e=>importAudio(e.target.files[0]));$('#removeAudio').addEventListener('click',()=>removeAudio());
 $('#practiceTabs').addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(b)changeTab(b.dataset.tab);});
 $('#practiceContent').addEventListener('click',async e=>{const b=e.target.closest('button,[data-cue-play]');if(!b)return;
@@ -174,22 +280,51 @@ if(b.hasAttribute('data-save-cue')){const i=Number(b.dataset.saveCue),t=$(`[data
 if(b.hasAttribute('data-cue-once')){playCue(Number(b.dataset.cueOnce),false);return;}if(b.hasAttribute('data-repeat-cue')){playCue(Number(b.dataset.repeatCue),false);return;}
 if(b.id==='submitDictation'){const answer=$('#dictationAnswer')?.value.trim(),reference=cueList()[chosenCue]?.text;if(!answer){notify('请先输入听到的内容。');return;}dictationResult=dictationScore(answer,reference);saveHistory('dictation',{score:dictationResult.score,cueId:cueList()[chosenCue]?.id});const keep=answer;renderPracticeContent();$('#dictationAnswer').value=keep;return;}
 if(b.id==='nextDictation'){chosenCue=(chosenCue+1)%cueList().length;dictationResult=null;renderPracticeContent();return;}
+if(b.id==='playWarmup'){speakText(WARMUPS[ep.id]?.[warmupIndex]?.en,warmupVoice);return;}
+if(b.id==='showWarmup'){warmupReveal=!warmupReveal;const keep=$('#warmupAnswer')?.value||'';renderPracticeContent();$('#warmupAnswer').value=keep;return;}
+if(b.id==='checkWarmup'){
+  const item=WARMUPS[ep.id]?.[warmupIndex];const typed=$('#warmupAnswer')?.value.trim();
+  if(!item||!typed){notify('先输入听到的英文，或者尝试根据中文提示翻译。');return;}
+  warmupResult=dictationScore(typed,item.en);saveHistory('warmup',{score:warmupResult.score,cueId:`warmup-${warmupIndex+1}`});
+  const keep=typed;renderPracticeContent();$('#warmupAnswer').value=keep;return;
+}
+if(b.id==='nextWarmup'){endRecording();stopSpeech();warmupIndex=(warmupIndex+1)%(WARMUPS[ep.id]||[]).length;warmupResult=null;warmupReveal=false;renderPracticeContent();return;}
 if(b.id==='recordToggle'){beginRecording();return;}
 if(b.hasAttribute('data-delete-rec')){if(confirm('删除此条本机录音？')){await dbRemove(b.dataset.deleteRec);renderRecordings();notify('已删除录音。');}return;}
 });
-$('#practiceContent').addEventListener('change',e=>{if(e.target.id==='dictationCue'||e.target.id==='shadowCue'){chosenCue=Number(e.target.value);dictationResult=null;renderPracticeContent();}});
+$('#practiceContent').addEventListener('change',e=>{if(e.target.id==='warmupVoice'){warmupVoice=e.target.value;return;}if(e.target.id==='dictationCue'||e.target.id==='shadowCue'){chosenCue=Number(e.target.value);dictationResult=null;renderPracticeContent();}});
 $('#sideVocab').addEventListener('click',e=>{const b=e.target.closest('[data-bookmark]');if(b)addBookmark(b.dataset.bookmark);});
-$('#vocabList').addEventListener('click',e=>{const b=e.target.closest('[data-bookmark],[data-delete-word]');if(!b)return;if(b.dataset.bookmark){addBookmark(b.dataset.bookmark);return;}const key=b.dataset.deleteWord;if(confirm('永久删除此个人词汇？')){state.customWords=state.customWords.filter(v=>v.key!==key);state.saved=state.saved.filter(v=>v!==key);persist();renderVocab();}});
+$('#vocabList').addEventListener('click',e=>{const b=e.target.closest('[data-bookmark],[data-delete-word],[data-speak-word]');if(!b)return;if(b.dataset.bookmark){addBookmark(b.dataset.bookmark);return;}if(b.dataset.speakWord){const word=allVocab().find(v=>v.key===b.dataset.speakWord);if(word)speakText(word.term);return;}const key=b.dataset.deleteWord;if(confirm('永久删除此个人词汇？')){state.customWords=state.customWords.filter(v=>v.key!==key);state.saved=state.saved.filter(v=>v!==key);persist();renderVocab();updateReviewBadge();}});
 $('#vocabFilter').addEventListener('click',e=>{const b=e.target.closest('[data-vfilter]');if(b){vocabFilter=b.dataset.vfilter;renderVocab();}});$('#vocabSearch').addEventListener('input',renderVocab);
-$('#newWord').addEventListener('click',()=>$('#wordDialog').showModal());$('#closeWord').addEventListener('click',()=>$('#wordDialog').close());$('#cancelWord').addEventListener('click',()=>$('#wordDialog').close());
-$('#wordForm').addEventListener('submit',e=>{e.preventDefault();const term=$('#wordEnglish').value.trim(),cn=$('#wordChinese').value.trim(),sample=$('#wordExample').value.trim();if(!term||!cn)return;const key=`mine:${Date.now()}:${Math.random().toString(36).slice(2,7)}`;state.customWords.push({term,cn,sample,key});state.saved.push(key);persist();$('#wordForm').reset();$('#wordDialog').close();renderVocab();notify('个人词汇已添加并收藏。');});
-$('#navImport').addEventListener('click',openImport);$('#cancelImport').addEventListener('click',()=>$('#importDialog').close());$('#saveTranscript').addEventListener('click',importTranscript);$('#transcriptFile').addEventListener('change',e=>$('#uploadTitle').textContent=e.target.files?.[0]?.name||'选择文件');
+$('#newWord').addEventListener('click',()=>$('#wordDialog').showModal());$('#exportQuizlet').addEventListener('click',exportQuizlet);$('#reviewLaunch').addEventListener('click',()=>changeView('review'));$('#reviewToVocab').addEventListener('click',()=>changeView('vocab'));$('#closeWord').addEventListener('click',()=>$('#wordDialog').close());$('#cancelWord').addEventListener('click',()=>$('#wordDialog').close());
+$('#wordForm').addEventListener('submit',e=>{e.preventDefault();const term=$('#wordEnglish').value.trim(),cn=$('#wordChinese').value.trim(),sample=$('#wordExample').value.trim();if(!term||!cn)return;const key=`mine:${Date.now()}:${Math.random().toString(36).slice(2,7)}`;state.customWords.push({term,cn,sample,key});state.saved.push(key);persist();$('#wordForm').reset();$('#wordDialog').close();renderVocab();updateReviewBadge();notify('个人词汇已添加并收藏。');});
+$('#reviewCard').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+ if(b.id==='revealReview'){reviewRevealed=!reviewRevealed;renderReview();return;}
+ if(b.id==='reviewAll'){resetReviewQueue(true);renderReview();return;}
+ if(b.id==='reviewBrowse'){changeView('vocab');return;}
+ if(b.dataset.reviewRating){rateReview(b.dataset.reviewRating);return;}
+ if(b.dataset.reviewSpeak){const w=allVocab().find(v=>v.key===b.dataset.reviewSpeak);if(w)speakText(w.term);return;}
+});
+$('#navImport').addEventListener('click',openImport);$('#cancelImport').addEventListener('click',()=>$('#importDialog').close());$('#saveTranscript').addEventListener('click',importTranscript);$('#transcriptFile').addEventListener('change',e=>{$('#uploadTitle').textContent=e.target.files?.[0]?.name||'选择文件';previewTranscript();});$('#transcriptPaste').addEventListener('input',previewTranscript);$('#timebase').addEventListener('change',previewTranscript);$('#transcriptEpisode').addEventListener('change',previewTranscript);
 $('#navBackup').addEventListener('click',()=>$('#backupDialog').showModal());$('#closeBackup').addEventListener('click',()=>$('#backupDialog').close());$('#downloadBackup').addEventListener('click',createBackup);$('#progressExport').addEventListener('click',createBackup);$('#backupFile').addEventListener('change',e=>restoreBackup(e.target.files?.[0]));
 $('#studyAudio').addEventListener('ended',()=>{notify('片段音频播放结束。');paintPlayer();});
-window.addEventListener('hashchange',()=>{const next=location.hash.slice(1);if(next&&next!==view)changeView(next);});
+window.addEventListener('hashchange',()=>{const [next,id]=location.hash.slice(1).split('/');
+ if(next==='practice'&&id&&EPISODES.some(e=>e.id===id)&&id!==ep.id){openEpisode(id);return;}
+ if(next&&next!==view)changeView(next);
+});
+window.addEventListener('keydown',e=>{
+ if(e.target instanceof HTMLElement&&e.target.closest('input,textarea,select,[contenteditable],dialog'))return;
+ if(view==='practice'&&e.code==='Space'){e.preventDefault();toggleMedia();}
+ if(view==='practice'&&e.code==='ArrowLeft'){e.preventDefault();mediaSeek(getPos()-5);}
+ if(view==='practice'&&e.code==='ArrowRight'){e.preventDefault();mediaSeek(getPos()+5);}
+ if(view==='review'&&e.key==='Enter'&&!reviewRevealed){reviewRevealed=true;renderReview();}
+ if(view==='review'&&reviewRevealed&&['1','2','3','4'].includes(e.key))rateReview(({1:'again',2:'hard',3:'good',4:'easy'})[e.key]);
+});
 window.addEventListener('beforeunload',()=>{persist();endRecording();});
 setInterval(tick,350);
 }
 function selectCard(e){const b=e.target.closest('[data-episode]');if(b)openEpisode(b.dataset.episode);}
-function boot(){bindEvents();renderOverview();renderLibrary();changeView(['overview','library','vocab','progress'].includes(location.hash.slice(1))?location.hash.slice(1):'overview');}
+function boot(){bindEvents();renderOverview();renderLibrary();if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost'))navigator.serviceWorker.register('./sw.js').catch(()=>{});const [page,id]=location.hash.slice(1).split('/');
+ if(page==='practice'&&id){const found=EPISODES.find(e=>e.id===id);if(found){ep=found;state.lastEpisode=found.id;}}
+ changeView(['overview','library','practice','vocab','review','progress'].includes(page)?page:'overview');}
 boot();

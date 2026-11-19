@@ -49,3 +49,34 @@ export function safeYoutubeId(id){return /^[a-zA-Z0-9_-]{11}$/.test(String(id));
 export function escapeHTML(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
 export function exportJSON(data){return JSON.stringify({app:'CEO English Lab',version:1,exportedAt:new Date().toISOString(),data},null,2);}
 export function validBackup(obj){return obj?.app==='CEO English Lab'&&obj?.version===1&&obj.data&&typeof obj.data==='object'&&!Array.isArray(obj.data);}
+
+/** Small, predictable spaced-repetition scheduler. Stored client-side only. */
+export function scheduleReview(previous={},rating='good',now=Date.now()){
+  const timestamp=typeof now==='number'?now:new Date(now).getTime();
+  const base=Number.isFinite(timestamp)?timestamp:Date.now();
+  const prevDays=Math.max(0,Number(previous.intervalDays)||0);
+  const counts=Math.max(0,Number(previous.reviews)||0)+1;
+  const streak=Math.max(0,Number(previous.streak)||0);
+  let nextDays,nextStreak;
+  if(rating==='again'){nextDays=10/(24*60);nextStreak=0;}
+  else if(rating==='hard'){nextDays=prevDays>0?Math.max(.333,prevDays*1.2):.333;nextStreak=streak;}
+  else if(rating==='easy'){nextDays=prevDays>0?Math.max(4,prevDays*2.5):4;nextStreak=streak+1;}
+  else {nextDays=prevDays>0?Math.max(1,prevDays*2):1;nextStreak=streak+1;}
+  return {intervalDays:nextDays,reviews:counts,streak:nextStreak,lastRating:rating,lastReviewedAt:new Date(base).toISOString(),dueAt:new Date(base+nextDays*86400000).toISOString()};
+}
+export function isReviewDue(record,now=Date.now()){
+  if(!record||!record.dueAt)return true;
+  const t=typeof now==='number'?now:new Date(now).getTime();
+  return new Date(record.dueAt).getTime()<=t;
+}
+/** Quizlet's tab-separated import format: term<TAB>definition. */
+export function quizletTSV(items){
+  const clean=s=>String(s??'').replace(/[\r\n\t]+/g,' ').trim();
+  const seen=new Set();
+  return (items||[]).filter(v=>{const key=clean(v.term).toLowerCase();if(!key||seen.has(key))return false;seen.add(key);return true;})
+    .map(v=>`${clean(v.term)}\t${clean(v.cn)}`).join('\n');
+}
+export function exportSRT(cues,offset=0){
+  const stamp=s=>{const ms=Math.max(0,Math.round(Number(s)*1000)),h=Math.floor(ms/3600000),m=Math.floor(ms%3600000/60000),sec=Math.floor(ms%60000/1000),r=ms%1000;return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')},${String(r).padStart(3,'0')}`;};
+  return (cues||[]).map((v,i)=>`${i+1}\n${stamp(v.start-offset)} --> ${stamp(v.end-offset)}\n${String(v.text||'').trim()}\n`).join('\n');
+}
